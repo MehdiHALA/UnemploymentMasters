@@ -1,8 +1,8 @@
-// Discord bot that shows a leaderboard based on PSN trophy data using psn-api and PostgreSQL
-// Required packages: npm install discord.js psn-api dotenv pg
+// Discord bot that shows a leaderboard based on PSN trophy data using psn-api
+// Install required packages: npm install discord.js psn-api dotenv pg
 
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const psn = require('psn-api');
+const { exchangeNpssoForCode, exchangeCodeForAccessToken, getUserTrophyProfileSummary, makeUniversalSearch } = require('psn-api');
 const { Pool } = require('pg');
 const dotenv = require('dotenv');
 dotenv.config();
@@ -48,9 +48,10 @@ client.once('ready', async () => {
   }
 
   await pool.query(`CREATE TABLE IF NOT EXISTS psn_users (
-    discord_id TEXT PRIMARY KEY,
-    username TEXT NOT NULL,
-    account_id TEXT NOT NULL
+    id TEXT PRIMARY KEY,
+    discord_id TEXT NOT NULL,
+    psn_username TEXT NOT NULL,
+    psn_id TEXT NOT NULL
   )`);
 });
 
@@ -59,23 +60,25 @@ client.on('interactionCreate', async interaction => {
   const { commandName } = interaction;
 
   if (commandName === 'addpsn') {
-    const username = interaction.options.getString('username');
+    const psnUsername = interaction.options.getString('username');
+    const discordId = interaction.user.id;
+    const id = `${discordId}:${psnUsername}`;
 
     try {
-      const code = await psn.exchangeNpssoForCode(NPSSO);
-      const tokens = await psn.exchangeCodeForAccessToken(code);
+      const code = await exchangeNpssoForCode(NPSSO);
+      const tokens = await exchangeCodeForAccessToken(code);
 
-      const searchResult = await psn.makeUniversalSearch(tokens, username, 'SocialAllAccounts');
-      const accountId = searchResult?.domainResponses?.find(r => r.domain === 'SocialAllAccounts')?.results?.[0]?.socialMetadata?.accountId;
+      const searchResult = await makeUniversalSearch(tokens, psnUsername, 'SocialAllAccounts');
+      const psnId = searchResult?.domainResponses?.find(r => r.domain === 'SocialAllAccounts')?.results?.[0]?.socialMetadata?.accountId;
 
-      if (!accountId) return await interaction.reply('❌ Could not find your PSN account.');
+      if (!psnId) return await interaction.reply('❌ Could not find your PSN account.');
 
-      await pool.query(`INSERT INTO psn_users (discord_id, username, account_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (discord_id) DO UPDATE SET username = $2, account_id = $3`,
-        [interaction.user.id, username, accountId]);
+      await pool.query(`INSERT INTO psn_users (id, discord_id, psn_username, psn_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (id) DO UPDATE SET psn_id = $4`,
+        [id, discordId, psnUsername, psnId]);
 
-      await interaction.reply(`✅ PSN user **${username}** saved!`);
+      await interaction.reply(`✅ PSN user **${psnUsername}** saved!`);
     } catch (err) {
       console.error('❌ Error:', err);
       await interaction.reply('⚠️ Failed to add your PSN username.');
@@ -84,8 +87,11 @@ client.on('interactionCreate', async interaction => {
 
   if (commandName === 'removepsn') {
     try {
+      const res = await pool.query('SELECT id FROM psn_users WHERE discord_id = $1', [interaction.user.id]);
+      if (res.rowCount === 0) return await interaction.reply('❌ No PSN username found.');
+
       await pool.query('DELETE FROM psn_users WHERE discord_id = $1', [interaction.user.id]);
-      await interaction.reply('🗑️ Your PSN username has been removed.');
+      await interaction.reply('🗑️ Your PSN usernames have been removed.');
     } catch (err) {
       console.error('❌ Error:', err);
       await interaction.reply('⚠️ Failed to remove your PSN username.');
@@ -95,24 +101,24 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'leaderboard') {
     await interaction.deferReply();
     try {
-      const code = await psn.exchangeNpssoForCode(NPSSO);
-      const tokens = await psn.exchangeCodeForAccessToken(code);
+      const code = await exchangeNpssoForCode(NPSSO);
+      const tokens = await exchangeCodeForAccessToken(code);
       const res = await pool.query('SELECT * FROM psn_users');
 
       const results = [];
       for (const row of res.rows) {
         try {
-          const summary = await psn.getUserTrophyProfileSummary(tokens, row.account_id);
+          const summary = await getUserTrophyProfileSummary(tokens, row.psn_id);
           const earned = summary.earnedTrophies || {};
           results.push({
-            username: row.username,
+            username: row.psn_username,
             platinum: earned.platinum || 0,
             gold: earned.gold || 0,
             silver: earned.silver || 0,
             bronze: earned.bronze || 0
           });
         } catch (err) {
-          console.warn(`⚠️ Failed for ${row.username}: ${err.message}`);
+          console.warn(`⚠️ Failed for ${row.id}: ${err.message}`);
         }
       }
 
