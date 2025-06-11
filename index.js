@@ -1,12 +1,10 @@
 // Discord bot that shows a leaderboard based on PSN trophy data using psn-api
-// Install required packages: npm install discord.js psn-api dotenv fs
+// Run: npm install discord.js dotenv psn-api
 
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
-import psnApi from 'psn-api'; // Correct import for CommonJS module
-import fs from 'fs';
 import dotenv from 'dotenv';
-
-dotenv.config();
+import fs from 'fs';
+import psnApi from 'psn-api';
 
 const {
   exchangeNpssoForCode,
@@ -15,11 +13,13 @@ const {
   makeUniversalSearch
 } = psnApi;
 
+dotenv.config();
+
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const NPSSO = process.env.PSN_NPSSO;
 const psnUsersFile = 'psn_users.json';
-let psnUsers = {};
 
+let psnUsers = {};
 if (fs.existsSync(psnUsersFile)) {
   psnUsers = JSON.parse(fs.readFileSync(psnUsersFile));
 }
@@ -88,7 +88,7 @@ client.on('interactionCreate', async interaction => {
         return;
       }
 
-      psnUsers[username] = { username, accountId }; // key by username, not user.id
+      psnUsers[interaction.user.id] = { username, accountId };
 
       let existingUsers = {};
       if (fs.existsSync(psnUsersFile)) {
@@ -99,9 +99,8 @@ client.on('interactionCreate', async interaction => {
         }
       }
 
-      existingUsers[username] = { username, accountId }; // keep all usernames
+      existingUsers[interaction.user.id] = { username, accountId };
       fs.writeFileSync(psnUsersFile, JSON.stringify(existingUsers, null, 2));
-
       await interaction.reply(`✅ PSN user **${username}** saved!`);
     } catch (err) {
       console.error(`❌ Error resolving account ID for ${username}:`, err.message);
@@ -124,7 +123,8 @@ client.on('interactionCreate', async interaction => {
 
     const results = [];
 
-    for (const { username, accountId } of Object.values(psnUsers)) {
+    for (const userObj of Object.values(psnUsers)) {
+      const { username, accountId } = userObj;
       if (!accountId) continue;
 
       try {
