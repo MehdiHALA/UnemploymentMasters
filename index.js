@@ -22,7 +22,8 @@ const commands = [
     .addStringOption(opt => opt.setName('username').setDescription('Your PSN username').setRequired(true)),
   new SlashCommandBuilder()
     .setName('removepsn')
-    .setDescription('Remove your PSN username'),
+    .setDescription('Remove your PSN username')
+    .addStringOption(opt => opt.setName('username').setDescription('Your PSN username to remove').setRequired(true)),
   new SlashCommandBuilder()
     .setName('leaderboard')
     .setDescription('Show PSN platinum leaderboard')
@@ -33,16 +34,8 @@ client.once('ready', async () => {
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   try {
-    if (process.env.DISCORD_GUILD_ID) {
-      await rest.put(
-        Routes.applicationGuildCommands(client.user.id, process.env.DISCORD_GUILD_ID),
-        { body: commands }
-      );
-      console.log('✅ Guild commands registered.');
-    } else {
-      await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-      console.log('✅ Global commands registered.');
-    }
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+    console.log('✅ Global commands registered.');
   } catch (err) {
     console.error('❌ Failed to register commands:', err);
   }
@@ -50,6 +43,7 @@ client.once('ready', async () => {
   await pool.query(`CREATE TABLE IF NOT EXISTS psn_users (
     id TEXT PRIMARY KEY,
     discord_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
     psn_username TEXT NOT NULL,
     psn_id TEXT NOT NULL
   )`);
@@ -62,6 +56,7 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'addpsn') {
     const psnUsername = interaction.options.getString('username');
     const discordId = interaction.user.id;
+    const guildId = interaction.guildId;
     const id = `${discordId}:${psnUsername}`;
 
     try {
@@ -73,10 +68,10 @@ client.on('interactionCreate', async interaction => {
 
       if (!psnId) return await interaction.reply('❌ Could not find your PSN account.');
 
-      await pool.query(`INSERT INTO psn_users (id, discord_id, psn_username, psn_id)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (id) DO UPDATE SET psn_id = $4`,
-        [id, discordId, psnUsername, psnId]);
+      await pool.query(`INSERT INTO psn_users (id, discord_id, guild_id, psn_username, psn_id)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (id) DO UPDATE SET psn_id = $5`,
+        [id, discordId, guildId, psnUsername, psnId]);
 
       await interaction.reply(`✅ PSN user **${psnUsername}** saved!`);
     } catch (err) {
@@ -86,12 +81,17 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (commandName === 'removepsn') {
-    try {
-      const res = await pool.query('SELECT id FROM psn_users WHERE discord_id = $1', [interaction.user.id]);
-      if (res.rowCount === 0) return await interaction.reply('❌ No PSN username found.');
+    const psnUsername = interaction.options.getString('username');
+    const discordId = interaction.user.id;
+    const guildId = interaction.guildId;
+    const id = `${discordId}:${psnUsername}`;
 
-      await pool.query('DELETE FROM psn_users WHERE discord_id = $1', [interaction.user.id]);
-      await interaction.reply('🗑️ Your PSN usernames have been removed.');
+    try {
+      const res = await pool.query('SELECT id FROM psn_users WHERE id = $1 AND guild_id = $2', [id, guildId]);
+      if (res.rowCount === 0) return await interaction.reply('❌ No matching PSN username found in this server.');
+
+      await pool.query('DELETE FROM psn_users WHERE id = $1 AND guild_id = $2', [id, guildId]);
+      await interaction.reply(`🗑️ PSN username **${psnUsername}** removed from this server.`);
     } catch (err) {
       console.error('❌ Error:', err);
       await interaction.reply('⚠️ Failed to remove your PSN username.');
@@ -101,9 +101,10 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'leaderboard') {
     await interaction.deferReply();
     try {
+      const guildId = interaction.guildId;
       const code = await exchangeNpssoForCode(NPSSO);
       const tokens = await exchangeCodeForAccessToken(code);
-      const res = await pool.query('SELECT * FROM psn_users');
+      const res = await pool.query('SELECT * FROM psn_users WHERE guild_id = $1', [guildId]);
 
       const results = [];
       for (const row of res.rows) {
@@ -122,7 +123,7 @@ client.on('interactionCreate', async interaction => {
         }
       }
 
-      if (results.length === 0) return await interaction.editReply('❌ No data found.');
+      if (results.length === 0) return await interaction.editReply('❌ No data found for this server.');
 
       results.sort((a, b) =>
         b.platinum - a.platinum || b.gold - a.gold || b.silver - a.silver || b.bronze - a.bronze
@@ -132,7 +133,8 @@ client.on('interactionCreate', async interaction => {
         `${i + 1}. **${u.username}** – 🏆 ${u.platinum} | 🥇 ${u.gold} | 🥈 ${u.silver} | 🥉 ${u.bronze}`
       ).join('\n');
 
-      await interaction.editReply(`🏅 **PSN Trophy Leaderboard**\n${msg}`);
+      await interaction.editReply(`🏅 **PSN Trophy Leaderboard** (This Server)
+${msg}`);
     } catch (err) {
       console.error('❌ Leaderboard error:', err);
       await interaction.editReply('⚠️ Failed to generate leaderboard.');
