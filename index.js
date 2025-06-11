@@ -1,26 +1,28 @@
-// Discord bot that shows a leaderboard based on PSN trophy data
-// Run: npm install discord.js dotenv psn-api
+// Discord bot that shows a leaderboard based on PSN trophy data using psn-api and stores data in PostgreSQL
+// Requires: npm install discord.js dotenv pg psn-api
 
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const dotenv = require('dotenv');
-const fs = require('fs');
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import pkg from 'psn-api';
+import dotenv from 'dotenv';
+import pg from 'pg';
+
+dotenv.config();
+
 const {
   exchangeNpssoForCode,
   exchangeCodeForAccessToken,
   getUserTrophyProfileSummary,
   makeUniversalSearch
-} = require('psn-api');
+} = pkg;
 
-dotenv.config();
+const { Pool } = pg;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const NPSSO = process.env.PSN_NPSSO;
-const psnUsersFile = 'psn_users.json';
-
-let psnUsers = {};
-if (fs.existsSync(psnUsersFile)) {
-  psnUsers = JSON.parse(fs.readFileSync(psnUsersFile));
-}
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
@@ -31,6 +33,9 @@ const commands = [
     .addStringOption(opt =>
       opt.setName('username').setDescription('Your PSN username').setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('removepsn')
+    .setDescription('Remove your PSN username from the leaderboard'),
   new SlashCommandBuilder()
     .setName('leaderboard')
     .setDescription('Show PSN platinum leaderboard')
@@ -59,23 +64,14 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
   const { commandName } = interaction;
 
   if (commandName === 'addpsn') {
     const username = interaction.options.getString('username');
 
-    let tokens;
     try {
       const accessCode = await exchangeNpssoForCode(NPSSO);
-      tokens = await exchangeCodeForAccessToken(accessCode);
-    } catch (err) {
-      console.error('❌ Auth error:', err);
-      await interaction.reply('⚠️ Failed to authenticate with PSN.');
-      return;
-    }
-
-    try {
+      const tokens = await exchangeCodeForAccessToken(accessCode);
       const searchResult = await makeUniversalSearch(tokens, username, 'SocialAllAccounts');
       const accountId = searchResult?.domainResponses
         ?.find(r => r.domain === 'SocialAllAccounts')
@@ -86,80 +82,77 @@ client.on('interactionCreate', async interaction => {
         return;
       }
 
-      psnUsers[interaction.user.id] = { username, accountId };
+      await pool.query(
+        `INSERT INTO psn_users (discord_id, username, account_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (discord_id) DO UPDATE SET username = $2, account_id = $3`,
+        [interaction.user.id, username, accountId]
+      );
 
-      let existingUsers = {};
-      if (fs.existsSync(psnUsersFile)) {
-        try {
-          existingUsers = JSON.parse(fs.readFileSync(psnUsersFile));
-        } catch (e) {
-          console.warn('⚠️ Failed to parse existing user file. Overwriting.');
-        }
-      }
-
-      existingUsers[interaction.user.id] = { username, accountId };
-      fs.writeFileSync(psnUsersFile, JSON.stringify(existingUsers, null, 2));
       await interaction.reply(`✅ PSN user **${username}** saved!`);
     } catch (err) {
-      console.error(`❌ Error resolving account ID for ${username}:`, err.message);
-      await interaction.reply('❌ Failed to resolve PSN account ID.');
+      console.error('❌ Error:', err);
+      await interaction.reply('❌ Failed to authenticate or retrieve account.');
+    }
+  }
+
+  if (commandName === 'removepsn') {
+    try {
+      await pool.query('DELETE FROM psn_users WHERE discord_id = $1', [interaction.user.id]);
+      await interaction.reply('🗑️ Your PSN username was removed from the leaderboard.');
+    } catch (err) {
+      console.error('❌ DB Error:', err);
+      await interaction.reply('❌ Could not remove your PSN username.');
     }
   }
 
   if (commandName === 'leaderboard') {
     await interaction.deferReply();
 
-    let tokens;
     try {
       const accessCode = await exchangeNpssoForCode(NPSSO);
-      tokens = await exchangeCodeForAccessToken(accessCode);
-    } catch (err) {
-      console.error('❌ Auth error:', err);
-      await interaction.editReply('⚠️ Failed to authenticate with PSN.');
-      return;
-    }
+      const tokens = await exchangeCodeForAccessToken(accessCode);
 
-    const results = [];
+      const res = await pool.query('SELECT * FROM psn_users');
+      const results = [];
 
-    for (const userObj of Object.values(psnUsers)) {
-      const { username, accountId } = userObj;
-      if (!accountId) continue;
+      for (const row of res.rows) {
+        try {
+          const summary = await getUserTrophyProfileSummary(tokens, row.account_id);
+          const earned = summary.earnedTrophies || {};
 
-      try {
-        const summary = await getUserTrophyProfileSummary(tokens, accountId);
-        const earned = summary.earnedTrophies || {};
-
-        results.push({
-          username,
-          platinum: earned.platinum || 0,
-          gold: earned.gold || 0,
-          silver: earned.silver || 0,
-          bronze: earned.bronze || 0
-        });
-      } catch (err) {
-        console.error(`❌ Error fetching trophy summary for ${username}:`, err.message);
+          results.push({
+            username: row.username,
+            platinum: earned.platinum || 0,
+            gold: earned.gold || 0,
+            silver: earned.silver || 0,
+            bronze: earned.bronze || 0
+          });
+        } catch (err) {
+          console.error(`❌ Error fetching data for ${row.username}:`, err.message);
+        }
       }
+
+      if (results.length === 0) {
+        await interaction.editReply('❌ No valid data could be retrieved.');
+        return;
+      }
+
+      results.sort((a, b) =>
+        b.platinum - a.platinum || b.gold - a.gold || b.silver - a.silver || b.bronze - a.bronze
+      );
+
+      const msg = results
+        .map((u, i) =>
+          `${i + 1}. **${u.username}** – 🏆 ${u.platinum} | 🥇 ${u.gold} | 🥈 ${u.silver} | 🥉 ${u.bronze}`
+        )
+        .join('\n');
+
+      await interaction.editReply(`🏅 **PSN Trophy Leaderboard**\n${msg}`);
+    } catch (err) {
+      console.error('❌ Leaderboard Error:', err);
+      await interaction.editReply('❌ Failed to generate leaderboard.');
     }
-
-    if (results.length === 0) {
-      await interaction.editReply('❌ No valid data could be retrieved.');
-      return;
-    }
-
-    results.sort((a, b) =>
-      b.platinum - a.platinum ||
-      b.gold - a.gold ||
-      b.silver - a.silver ||
-      b.bronze - a.bronze
-    );
-
-    const msg = results
-      .map((u, i) =>
-        `${i + 1}. **${u.username}** – 🏆 ${u.platinum} | 🥇 ${u.gold} | 🥈 ${u.silver} | 🥉 ${u.bronze}`
-      )
-      .join('\n');
-
-    await interaction.editReply(`🏅 **PSN Trophy Leaderboard**\n${msg}`);
   }
 });
 
