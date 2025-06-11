@@ -57,7 +57,7 @@ client.on('interactionCreate', async interaction => {
     const psnUsername = interaction.options.getString('username');
     const discordId = interaction.user.id;
     const guildId = interaction.guildId;
-    const id = `${discordId}:${psnUsername}`;
+    const id = `${guildId}:${discordId}:${psnUsername}`;
 
     try {
       const code = await exchangeNpssoForCode(NPSSO);
@@ -84,7 +84,7 @@ client.on('interactionCreate', async interaction => {
     const psnUsername = interaction.options.getString('username');
     const discordId = interaction.user.id;
     const guildId = interaction.guildId;
-    const id = `${discordId}:${psnUsername}`;
+    const id = `${guildId}:${discordId}:${psnUsername}`;
 
     try {
       const res = await pool.query('SELECT id FROM psn_users WHERE id = $1 AND guild_id = $2', [id, guildId]);
@@ -133,8 +133,7 @@ client.on('interactionCreate', async interaction => {
         `${i + 1}. **${u.username}** – 🏆 ${u.platinum} | 🥇 ${u.gold} | 🥈 ${u.silver} | 🥉 ${u.bronze}`
       ).join('\n');
 
-      await interaction.editReply(`🏅 **PSN Trophy Leaderboard** (This Server)
-${msg}`);
+      await interaction.editReply(`🏅 **PSN Trophy Leaderboard** (This Server)\n${msg}`);
     } catch (err) {
       console.error('❌ Leaderboard error:', err);
       await interaction.editReply('⚠️ Failed to generate leaderboard.');
