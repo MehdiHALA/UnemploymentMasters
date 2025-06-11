@@ -2,15 +2,18 @@
 // Install required packages: npm install discord.js psn-api dotenv fs
 
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
-import {
+import psnApi from 'psn-api'; // Correct import for CommonJS module
+import fs from 'fs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const {
   exchangeNpssoForCode,
   exchangeCodeForAccessToken,
   getUserTrophyProfileSummary,
   makeUniversalSearch
-} from 'psn-api';
-import fs from 'fs';
-import dotenv from 'dotenv';
-dotenv.config();
+} = psnApi;
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const NPSSO = process.env.PSN_NPSSO;
@@ -85,7 +88,7 @@ client.on('interactionCreate', async interaction => {
         return;
       }
 
-      psnUsers[username] = { username, accountId };
+      psnUsers[username] = { username, accountId }; // key by username, not user.id
 
       let existingUsers = {};
       if (fs.existsSync(psnUsersFile)) {
@@ -96,8 +99,9 @@ client.on('interactionCreate', async interaction => {
         }
       }
 
-      existingUsers[username] = { username, accountId };
+      existingUsers[username] = { username, accountId }; // keep all usernames
       fs.writeFileSync(psnUsersFile, JSON.stringify(existingUsers, null, 2));
+
       await interaction.reply(`✅ PSN user **${username}** saved!`);
     } catch (err) {
       console.error(`❌ Error resolving account ID for ${username}:`, err.message);
@@ -120,8 +124,7 @@ client.on('interactionCreate', async interaction => {
 
     const results = [];
 
-    for (const userObj of Object.values(psnUsers)) {
-      const { username, accountId } = userObj;
+    for (const { username, accountId } of Object.values(psnUsers)) {
       if (!accountId) continue;
 
       try {
