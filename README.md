@@ -10,8 +10,13 @@ A Discord bot that creates a dynamic leaderboard based on PlayStation Network (P
 - Persistent storage via JSON file
 - Sorted by Plat > Gold > Silver > Bronze
 
+## 📄 License
+
+This project is licensed under the [MIT License](./LICENSE).
+
 ## 🚀 Getting Started
 
 ### 1. Clone the repo
 ```bash
 git clone https://github.com/MehdiHALA/UnemploymentMasters
+
