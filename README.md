@@ -14,5 +14,4 @@ A Discord bot that creates a dynamic leaderboard based on PlayStation Network (P
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/YOUR_USERNAME/psn-leaderboard-bot.git
-cd psn-leaderboard-bot
+git clone https://github.com/MehdiHALA/UnemploymentMasters
