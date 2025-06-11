@@ -1,17 +1,15 @@
-// Discord bot that shows a leaderboard based on PSN trophy data using psn-api
+// Discord bot that shows a leaderboard based on PSN trophy data
 // Run: npm install discord.js dotenv psn-api
 
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
-import dotenv from 'dotenv';
-import fs from 'fs';
-import psnApi from 'psn-api';
-
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const dotenv = require('dotenv');
+const fs = require('fs');
 const {
   exchangeNpssoForCode,
   exchangeCodeForAccessToken,
   getUserTrophyProfileSummary,
   makeUniversalSearch
-} = psnApi;
+} = require('psn-api');
 
 dotenv.config();
 
