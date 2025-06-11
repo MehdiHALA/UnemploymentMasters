@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
+  "description": "A Discord bot that displays a leaderboard based on PSN trophy data using the PSN API.",
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": ["discord", "psn", "bot", "trophies", "leaderboard"],
+  "author": "MehdiHALA",
+  "license": "MIT",
   "dependencies": {
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
-    "fs": "^0.0.1-security",
     "psn-api": "^2.13.0"
   }
 }
