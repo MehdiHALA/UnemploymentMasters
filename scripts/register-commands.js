@@ -4,6 +4,7 @@ const applicationId = process.env.DISCORD_APPLICATION_ID;
 const CommandOptionType = {
   SUB_COMMAND: 1,
   STRING: 3,
+  INTEGER: 4,
   USER: 6,
   CHANNEL: 7,
 };
@@ -61,6 +62,32 @@ const commands = [
   {
     name: "rank",
     description: "Show your place in the server trophy standings",
+    type: 1,
+  },
+  {
+    name: "recent",
+    description: "Show recent PSN games with trophy progress",
+    type: 1,
+    options: [
+      {
+        name: "user",
+        description: "Discord user to view",
+        type: CommandOptionType.USER,
+        required: false,
+      },
+      {
+        name: "limit",
+        description: "Number of recent games to show",
+        type: CommandOptionType.INTEGER,
+        min_value: 1,
+        max_value: 10,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: "movers",
+    description: "Show this week's biggest trophy gains",
     type: 1,
   },
   {
