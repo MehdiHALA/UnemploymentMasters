@@ -300,7 +300,7 @@ async function leaderboard(interaction, env) {
     return;
   }
 
-  await editOriginalResponse(interaction, buildLeaderboardPayload(data, { title: "PSN Trophy Leaderboard" }));
+  await editOriginalResponse(interaction, buildLeaderboardPayload(data, { title: "Server Trophy Standings" }));
 }
 
 async function profile(interaction, env) {
@@ -487,7 +487,7 @@ async function postConfiguredWeeklyLeaderboard(interaction, env) {
     return;
   }
 
-  await postChannelMessage(env, settings.leaderboard_channel_id, buildLeaderboardPayload(data, { title: "Weekly PSN Trophy Leaderboard" }));
+  await postChannelMessage(env, settings.leaderboard_channel_id, buildLeaderboardPayload(data, { title: "Weekly Trophy Standings" }));
   await editOriginalResponse(interaction, `Posted the current PSN leaderboard to <#${settings.leaderboard_channel_id}>.`);
 }
 
@@ -526,7 +526,7 @@ async function postWeeklyLeaderboards(env) {
         await postChannelMessage(
           env,
           settings.leaderboard_channel_id,
-          buildLeaderboardPayload(data, { title: "Weekly PSN Trophy Leaderboard" })
+          buildLeaderboardPayload(data, { title: "Weekly Trophy Standings" })
         );
 
         await env.DB.prepare(
@@ -695,11 +695,19 @@ function normalizeCachedStats(cached, row, { isStale }) {
 
 function buildLeaderboardPayload(data, { title }) {
   const topEntries = data.entries.slice(0, LEADERBOARD_LIMIT);
-  const fields = topEntries.map((entry, index) => ({
-    name: formatLeaderboardFieldName(entry, index + 1),
-    value: formatLeaderboardFieldValue(entry),
-    inline: false,
-  }));
+  const leader = topEntries[0];
+  const fields = [
+    {
+      name: "Current leader",
+      value: formatLeaderSummary(leader),
+      inline: false,
+    },
+    {
+      name: "Standings",
+      value: formatLeaderboardTable(topEntries),
+      inline: false,
+    },
+  ];
 
   const footerParts = [
     `${data.total} registered`,
@@ -713,7 +721,7 @@ function buildLeaderboardPayload(data, { title }) {
       {
         title,
         color: PSN_BLUE,
-        description: "Top trophy hunters in this server.",
+        description: "Ranked by platinum, then gold, silver, bronze.",
         fields,
         footer: { text: footerParts.join(" | ") },
         timestamp: data.updatedAt ? new Date(data.updatedAt).toISOString() : undefined,
@@ -755,17 +763,28 @@ function buildProfileEmbed(stats, discordId, options = {}) {
   };
 }
 
-function formatLeaderboardFieldName(entry, rankNumber) {
-  const label = rankNumber === 1 ? "Champion" : `Rank #${rankNumber}`;
-  return `${label} - ${entry.psnUsername}`;
+function formatLeaderSummary(entry) {
+  return `**${escapeMarkdown(entry.psnUsername)}** leads with **${formatNumber(entry.platinum)}** platinum trophies and **${formatNumber(entry.total)}** total trophies.`;
 }
 
-function formatLeaderboardFieldValue(entry) {
-  return [
-    `Platinum **${entry.platinum}** | Gold **${entry.gold}**`,
-    `Silver **${entry.silver}** | Bronze **${entry.bronze}**`,
-    `Total trophies **${entry.total}**`,
-  ].join("\n");
+function formatLeaderboardTable(entries) {
+  const rows = [
+    `${padCell("Rank", 5)} ${padCell("PSN", 16)} ${padLeft("Plat", 4)} ${padLeft("Gold", 4)} ${padLeft("Silv", 4)} ${padLeft("Brnz", 6)} ${padLeft("Total", 8)}`,
+    `${padCell("----", 5)} ${padCell("---------------", 16)} ${padLeft("----", 4)} ${padLeft("----", 4)} ${padLeft("----", 4)} ${padLeft("------", 6)} ${padLeft("------", 8)}`,
+    ...entries.map((entry, index) =>
+      [
+        padCell(`#${index + 1}`, 5),
+        padCell(truncateTableText(entry.psnUsername, 16), 16),
+        padLeft(formatNumber(entry.platinum), 4),
+        padLeft(formatNumber(entry.gold), 4),
+        padLeft(formatNumber(entry.silver), 4),
+        padLeft(formatNumber(entry.bronze), 6),
+        padLeft(formatNumber(entry.total), 8),
+      ].join(" ")
+    ),
+  ];
+
+  return `\`\`\`text\n${rows.join("\n")}\n\`\`\``;
 }
 
 function formatStatsBlock(entry) {
@@ -791,7 +810,7 @@ function formatLevel(entry) {
 }
 
 function formatTrophyCounts(entry) {
-  return `Platinum ${entry.platinum} | Gold ${entry.gold} | Silver ${entry.silver} | Bronze ${entry.bronze}`;
+  return `Platinum ${formatNumber(entry.platinum)} | Gold ${formatNumber(entry.gold)} | Silver ${formatNumber(entry.silver)} | Bronze ${formatNumber(entry.bronze)}`;
 }
 
 function formatDiscordTimestamp(timestampMs) {
@@ -1136,6 +1155,28 @@ function nullableNumber(value) {
 function toNumber(value) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatNumber(value) {
+  return toNumber(value).toLocaleString("en-US");
+}
+
+function truncateTableText(value, maxLength) {
+  const text = String(value);
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength - 1)}.`;
+}
+
+function padCell(value, width) {
+  return String(value).padEnd(width, " ");
+}
+
+function padLeft(value, width) {
+  return String(value).padStart(width, " ");
 }
 
 function escapeMarkdown(value) {
