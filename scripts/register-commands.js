@@ -16,12 +16,12 @@ const ChannelType = {
 const commands = [
   {
     name: "addpsn",
-    description: "Add your PSN username",
+    description: "Link a PSN username to your Discord profile",
     type: 1,
     options: [
       {
         name: "username",
-        description: "Your PSN username",
+        description: "The PSN username to link",
         type: CommandOptionType.STRING,
         required: true,
       },
@@ -29,12 +29,12 @@ const commands = [
   },
   {
     name: "removepsn",
-    description: "Remove your PSN username",
+    description: "Remove one of your saved PSN usernames",
     type: 1,
     options: [
       {
         name: "username",
-        description: "Your PSN username to remove",
+        description: "The saved PSN username to remove",
         type: CommandOptionType.STRING,
         required: true,
       },
@@ -42,7 +42,7 @@ const commands = [
   },
   {
     name: "leaderboard",
-    description: "Show PSN platinum leaderboard",
+    description: "Show the server PSN trophy standings",
     type: 1,
   },
   {
@@ -52,7 +52,7 @@ const commands = [
     options: [
       {
         name: "user",
-        description: "Discord user to inspect",
+        description: "Discord user to view",
         type: CommandOptionType.USER,
         required: false,
       },
@@ -60,23 +60,23 @@ const commands = [
   },
   {
     name: "rank",
-    description: "Show your PSN trophy rank in this server",
+    description: "Show your place in the server trophy standings",
     type: 1,
   },
   {
     name: "weeklyleaderboard",
-    description: "Manage weekly PSN leaderboard posts",
+    description: "Manage weekly PSN trophy leaderboard posts",
     type: 1,
     default_member_permissions: "32",
     options: [
       {
         name: "set",
-        description: "Set the weekly leaderboard channel",
+        description: "Choose where weekly trophy standings are posted",
         type: CommandOptionType.SUB_COMMAND,
         options: [
           {
             name: "channel",
-            description: "Text channel for weekly posts",
+            description: "Text channel for weekly standings",
             type: CommandOptionType.CHANNEL,
             channel_types: [ChannelType.GUILD_TEXT, ChannelType.GUILD_ANNOUNCEMENT],
             required: true,
@@ -85,12 +85,12 @@ const commands = [
       },
       {
         name: "disable",
-        description: "Disable weekly leaderboard posts",
+        description: "Turn off weekly trophy standings",
         type: CommandOptionType.SUB_COMMAND,
       },
       {
         name: "post",
-        description: "Post the current leaderboard now",
+        description: "Post the current trophy standings now",
         type: CommandOptionType.SUB_COMMAND,
       },
     ],
