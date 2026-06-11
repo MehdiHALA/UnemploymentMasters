@@ -91,6 +91,46 @@ const commands = [
     type: 1,
   },
   {
+    name: "platinums",
+    description: "Show recent platinum-completed PSN games",
+    type: 1,
+    options: [
+      {
+        name: "username",
+        description: "PSN username to view",
+        type: CommandOptionType.STRING,
+        required: false,
+      },
+      {
+        name: "limit",
+        description: "Number of platinum games to show",
+        type: CommandOptionType.INTEGER,
+        min_value: 1,
+        max_value: 10,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: "compare",
+    description: "Compare two PSN usernames",
+    type: 1,
+    options: [
+      {
+        name: "username1",
+        description: "First PSN username",
+        type: CommandOptionType.STRING,
+        required: true,
+      },
+      {
+        name: "username2",
+        description: "Second PSN username",
+        type: CommandOptionType.STRING,
+        required: true,
+      },
+    ],
+  },
+  {
     name: "weeklyleaderboard",
     description: "Manage weekly PSN trophy leaderboard posts",
     type: 1,

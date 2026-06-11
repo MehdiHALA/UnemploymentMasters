@@ -7,12 +7,20 @@ const PSN_TROPHY_BASE_URL = "https://m.np.playstation.com/api/trophy";
 const PSN_USER_LEGACY_BASE_URL = "https://us-prof.np.community.playstation.net/userProfile/v1/users";
 
 const PSN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const PSN_USERNAME_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const RECENT_TITLES_DEFAULT_LIMIT = 5;
 const RECENT_TITLES_MAX_LIMIT = 10;
+const PLATINUMS_DEFAULT_LIMIT = 5;
+const PLATINUMS_MAX_LIMIT = 10;
+const PLATINUMS_FETCH_LIMIT = 800;
 const PLATINUM_SCAN_ACCOUNT_LIMIT = 100;
 const PLATINUM_SCAN_TITLE_LIMIT = 100;
 const LEADERBOARD_LIMIT = 10;
 const PSN_BLUE = 0x006fcd;
+const OUTPLAYED_TRASH_GUILD_ID = "784782670856978464";
+const OUTPLAYED_TRASH_REMINDER_CHANNEL_ID = "784782670856978468";
+const NPSSO_EXPIRES_AT_MS = Date.UTC(2026, 7, 10, 0, 0, 0);
+const NPSSO_REMINDER_THRESHOLDS = [14, 7, 3, 1];
 const ADMINISTRATOR_PERMISSION = 1n << 3n;
 const MANAGE_GUILD_PERMISSION = 1n << 5n;
 const WEEKLY_CRON_LABEL = "Sundays at 16:00 UTC";
@@ -119,6 +127,46 @@ export const commands = [
     type: 1,
   },
   {
+    name: "platinums",
+    description: "Show recent platinum-completed PSN games",
+    type: 1,
+    options: [
+      {
+        name: "username",
+        description: "PSN username to view",
+        type: CommandOptionType.STRING,
+        required: false,
+      },
+      {
+        name: "limit",
+        description: "Number of platinum games to show",
+        type: CommandOptionType.INTEGER,
+        min_value: 1,
+        max_value: PLATINUMS_MAX_LIMIT,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: "compare",
+    description: "Compare two PSN usernames",
+    type: 1,
+    options: [
+      {
+        name: "username1",
+        description: "First PSN username",
+        type: CommandOptionType.STRING,
+        required: true,
+      },
+      {
+        name: "username2",
+        description: "Second PSN username",
+        type: CommandOptionType.STRING,
+        required: true,
+      },
+    ],
+  },
+  {
     name: "weeklyleaderboard",
     description: "Manage weekly PSN trophy leaderboard posts",
     type: 1,
@@ -191,7 +239,7 @@ export default {
 
   async scheduled(event, env, ctx) {
     if (event.cron === HOURLY_CRON) {
-      ctx.waitUntil(scanPlatinumAlerts(env));
+      ctx.waitUntil(runHourlyJobs(env));
       return;
     }
 
@@ -242,6 +290,16 @@ async function handleCommand(interaction, env) {
 
     if (commandName === "movers") {
       await movers(interaction, env);
+      return;
+    }
+
+    if (commandName === "platinums") {
+      await platinums(interaction, env);
+      return;
+    }
+
+    if (commandName === "compare") {
+      await compare(interaction, env);
       return;
     }
 
@@ -498,6 +556,93 @@ async function movers(interaction, env) {
   await editOriginalResponse(interaction, buildMoversPayload(moversData));
 }
 
+async function platinums(interaction, env) {
+  const username = getStringOption(interaction, "username");
+  const limit = clampInteger(getIntegerOption(interaction, "limit") || PLATINUMS_DEFAULT_LIMIT, 1, PLATINUMS_MAX_LIMIT);
+  const tokenProvider = createPsnTokenProvider(env);
+  const rows = [];
+
+  if (username) {
+    const tokens = await tokenProvider();
+    rows.push(await resolvePsnUserByUsername(env, tokens, username, interaction.guild_id));
+  } else {
+    const discordId = getInteractionUserId(interaction);
+    const { results = [] } = await env.DB.prepare(
+      `SELECT *
+       FROM psn_users
+       WHERE guild_id = ? AND discord_id = ?
+       ORDER BY lower(psn_username)`
+    )
+      .bind(interaction.guild_id, discordId)
+      .all();
+
+    rows.push(...results);
+  }
+
+  if (rows.length === 0) {
+    await editOriginalResponse(interaction, "No linked PSN usernames found. Use /addpsn first, or run /platinums username:<psn>.");
+    return;
+  }
+
+  const titles = [];
+  const failures = [];
+
+  for (const row of rows) {
+    try {
+      titles.push(...(await getPlatinumTitleSnapshots(env, row, { tokenProvider })));
+    } catch (err) {
+      failures.push(row);
+      console.warn(`Failed to load platinum titles for ${row.id}: ${err.message}`);
+    }
+  }
+
+  titles.sort(compareTitleSnapshots);
+
+  if (titles.length === 0) {
+    const label = username ? `**${escapeMarkdown(username)}** has` : "Your linked PSN profile has";
+    await editOriginalResponse(interaction, `${label} no platinum-completed games in the fetched trophy list yet.`);
+    return;
+  }
+
+  await editOriginalResponse(interaction, buildPlatinumsPayload(titles.slice(0, limit), rows, failures.length));
+}
+
+async function compare(interaction, env) {
+  const username1 = getStringOption(interaction, "username1");
+  const username2 = getStringOption(interaction, "username2");
+
+  if (!username1 || !username2) {
+    await editOriginalResponse(interaction, "Please provide two PSN usernames.");
+    return;
+  }
+
+  if (username1.toLowerCase() === username2.toLowerCase()) {
+    await editOriginalResponse(interaction, "Choose two different PSN usernames to compare.");
+    return;
+  }
+
+  const tokens = await getPsnTokens(env.PSN_NPSSO);
+  const [row1, row2] = await Promise.all([
+    resolvePsnUserByUsername(env, tokens, username1, interaction.guild_id),
+    resolvePsnUserByUsername(env, tokens, username2, interaction.guild_id),
+  ]);
+  const tokenProvider = async () => tokens;
+  const [stats1, stats2, recent1, recent2] = await Promise.all([
+    getCachedTrophyStats(env, row1, { tokenProvider }),
+    getCachedTrophyStats(env, row2, { tokenProvider }),
+    getRecentTitleSnapshots(env, row1, { limit: 1, tokenProvider }).catch((err) => {
+      console.warn(`Failed to load recent title for ${row1.id}: ${err.message}`);
+      return [];
+    }),
+    getRecentTitleSnapshots(env, row2, { limit: 1, tokenProvider }).catch((err) => {
+      console.warn(`Failed to load recent title for ${row2.id}: ${err.message}`);
+      return [];
+    }),
+  ]);
+
+  await editOriginalResponse(interaction, buildComparePayload(stats1, stats2, recent1[0], recent2[0]));
+}
+
 async function weeklyLeaderboard(interaction, env) {
   if (!hasManageGuild(interaction)) {
     await editOriginalResponse(interaction, "You need Manage Server permission to manage weekly leaderboards.");
@@ -726,6 +871,75 @@ async function getRecentTitleSnapshots(env, row, options = {}) {
   }
 }
 
+async function getPlatinumTitleSnapshots(env, row, options = {}) {
+  try {
+    const tokenProvider = options.tokenProvider || createPsnTokenProvider(env);
+    const tokens = await tokenProvider();
+    const response = await getUserTitles(tokens, row.psn_id, { limit: PLATINUMS_FETCH_LIMIT });
+    const snapshots = normalizeTitleSnapshots(row, response.trophyTitles || [], Date.now());
+    const existing = await getTitleSnapshotMap(env.DB, row.psn_id);
+    const lastAlertedPlatinumById = new Map(
+      snapshots.map((snapshot) => [
+        snapshot.id,
+        existing.has(snapshot.id) ? toNumber(existing.get(snapshot.id).last_alerted_platinum) : snapshot.platinum,
+      ])
+    );
+
+    await upsertTitleSnapshots(env.DB, snapshots, { lastAlertedPlatinumById });
+
+    return snapshots.filter((title) => title.platinum > 0);
+  } catch (err) {
+    const cached = await getCachedTitleSnapshots(env.DB, row, PLATINUMS_FETCH_LIMIT);
+    const platinums = cached.filter((title) => title.platinum > 0);
+
+    if (platinums.length > 0) {
+      return platinums.map((title) => ({ ...title, isStale: true }));
+    }
+
+    throw err;
+  }
+}
+
+async function resolvePsnUserByUsername(env, tokens, username, guildId) {
+  const normalized = username.trim().toLowerCase();
+  const cached = await env.DB.prepare("SELECT * FROM psn_username_cache WHERE normalized_username = ?")
+    .bind(normalized)
+    .first();
+
+  if (cached && Date.now() - toNumber(cached.fetched_at) < PSN_USERNAME_CACHE_TTL_MS) {
+    return buildVirtualPsnRow(guildId, cached.psn_username, cached.psn_id);
+  }
+
+  const psnId = await findPsnAccountId(tokens, username);
+
+  if (!psnId) {
+    throw new Error(`Could not find PSN username ${username}.`);
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO psn_username_cache (normalized_username, psn_username, psn_id, fetched_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(normalized_username) DO UPDATE SET
+       psn_username = excluded.psn_username,
+       psn_id = excluded.psn_id,
+       fetched_at = excluded.fetched_at`
+  )
+    .bind(normalized, username, psnId, Date.now())
+    .run();
+
+  return buildVirtualPsnRow(guildId, username, psnId);
+}
+
+function buildVirtualPsnRow(guildId, psnUsername, psnId) {
+  return {
+    id: `lookup:${guildId}:${psnUsername.toLowerCase()}`,
+    discord_id: "lookup",
+    guild_id: guildId,
+    psn_username: psnUsername,
+    psn_id: psnId,
+  };
+}
+
 async function getCachedTitleSnapshots(db, row, limit) {
   const { results = [] } = await db.prepare(
     `SELECT *
@@ -887,6 +1101,11 @@ async function resetWeeklyBaselinesForGuild(env, guildId, entries) {
   }
 }
 
+async function runHourlyJobs(env) {
+  await postNpssoExpiryReminder(env);
+  await scanPlatinumAlerts(env);
+}
+
 async function scanPlatinumAlerts(env) {
   try {
     await ensureDatabase(env.DB);
@@ -948,6 +1167,57 @@ async function scanPlatinumAlerts(env) {
     await setJobState(env.DB, "platinum_scan_cursor", lastCursor);
   } catch (err) {
     console.error("Platinum scan job failed:", err);
+  }
+}
+
+async function postNpssoExpiryReminder(env) {
+  try {
+    await ensureDatabase(env.DB);
+
+    if (!env.DISCORD_BOT_TOKEN) {
+      console.warn("Skipping NPSSO reminder because DISCORD_BOT_TOKEN is missing.");
+      return;
+    }
+
+    const now = Date.now();
+    const utcDate = new Date(now).toISOString().slice(0, 10);
+    const lastCheck = await getJobState(env.DB, "npsso_expiry_last_check_date");
+
+    if (lastCheck === utcDate) {
+      return;
+    }
+
+    const daysRemaining = Math.ceil((NPSSO_EXPIRES_AT_MS - now) / (24 * 60 * 60 * 1000));
+    let reminderKey = "";
+
+    if (daysRemaining <= 0) {
+      reminderKey = "expired";
+    } else if (NPSSO_REMINDER_THRESHOLDS.includes(daysRemaining)) {
+      reminderKey = `${daysRemaining}d`;
+    }
+
+    if (!reminderKey) {
+      await setJobState(env.DB, "npsso_expiry_last_check_date", utcDate);
+      return;
+    }
+
+    const sentKey = `npsso_expiry_reminder_${reminderKey}`;
+    const alreadySent = await getJobState(env.DB, sentKey);
+
+    if (alreadySent) {
+      await setJobState(env.DB, "npsso_expiry_last_check_date", utcDate);
+      return;
+    }
+
+    await postChannelMessage(
+      env,
+      OUTPLAYED_TRASH_REMINDER_CHANNEL_ID,
+      buildNpssoReminderPayload(daysRemaining)
+    );
+    await setJobState(env.DB, sentKey, new Date(now).toISOString());
+    await setJobState(env.DB, "npsso_expiry_last_check_date", utcDate);
+  } catch (err) {
+    console.error("NPSSO expiry reminder failed:", err);
   }
 }
 
@@ -1281,6 +1551,94 @@ function buildRecentPayload(titles, discordId, failureCount) {
   return { embeds };
 }
 
+function buildPlatinumsPayload(titles, rows, failureCount) {
+  const embeds = titles.slice(0, PLATINUMS_MAX_LIMIT).map((title, index) => ({
+    title: title.titleName,
+    color: 0xd6af36,
+    description: [
+      `**${escapeMarkdown(title.psnUsername)}**`,
+      title.platform ? `Platform: ${escapeMarkdown(title.platform)}` : "",
+      `Progress: **${title.progress}%**`,
+      formatTrophyCounts(title),
+      title.lastUpdatedAt ? `Last update: ${formatDiscordTimestamp(Date.parse(title.lastUpdatedAt))}` : "",
+      title.isStale ? "Showing cached data because PSN refresh failed." : "",
+    ].filter(Boolean).join("\n"),
+    thumbnail: title.titleIconUrl ? { url: title.titleIconUrl } : undefined,
+    footer: {
+      text: [
+        `Platinum game ${index + 1} of ${titles.length}`,
+        failureCount > 0 ? `${failureCount} profile refresh failed` : "",
+      ].filter(Boolean).join(" | "),
+    },
+  }));
+
+  if (embeds.length > 0) {
+    const label = rows.length === 1 ? rows[0].psn_username : `${rows.length} PSN profiles`;
+    embeds[0].author = { name: `Recent platinums for ${label}` };
+  }
+
+  return { embeds };
+}
+
+function buildComparePayload(stats1, stats2, recent1, recent2) {
+  return {
+    embeds: [
+      {
+        title: `${stats1.psnUsername} vs ${stats2.psnUsername}`,
+        color: PSN_BLUE,
+        description: "PSN trophy comparison",
+        fields: [
+          {
+            name: stats1.psnUsername,
+            value: formatCompareProfile(stats1, recent1),
+            inline: true,
+          },
+          {
+            name: stats2.psnUsername,
+            value: formatCompareProfile(stats2, recent2),
+            inline: true,
+          },
+          {
+            name: "Leaders",
+            value: formatCompareLeaders(stats1, stats2),
+            inline: false,
+          },
+        ],
+        timestamp: new Date(Math.max(stats1.fetchedAt || 0, stats2.fetchedAt || 0)).toISOString(),
+      },
+    ],
+  };
+}
+
+function buildNpssoReminderPayload(daysRemaining) {
+  const expired = daysRemaining <= 0;
+  const title = expired ? "PSN_NPSSO has expired or expires today" : `PSN_NPSSO expires in ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}`;
+
+  return {
+    embeds: [
+      {
+        title,
+        color: expired ? 0xd83c3e : 0xd6af36,
+        description: [
+          `Reminder for Outplayed Trash.`,
+          `Current estimate: **August 10, 2026**.`,
+          "",
+          "Refresh the NPSSO token, then update the Cloudflare Worker secret `PSN_NPSSO`.",
+          "After updating the secret, redeploy is not required for Worker secrets.",
+        ].join("\n"),
+        fields: [
+          {
+            name: "How to refresh",
+            value: "Log into PlayStation in a browser, open `https://ca.account.sony.com/api/v1/ssocookie`, copy the new `npsso`, then run `wrangler secret put PSN_NPSSO`.",
+            inline: false,
+          },
+        ],
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
 function buildMoversPayload(data, options = {}) {
   if (!data.hasBaseline) {
     return {
@@ -1431,6 +1789,45 @@ function formatStatsBlock(entry) {
   return lines.join("\n");
 }
 
+function formatCompareProfile(stats, recentTitle) {
+  return [
+    formatLevel(stats),
+    `Platinum **${formatNumber(stats.platinum)}**`,
+    `Gold **${formatNumber(stats.gold)}**`,
+    `Silver **${formatNumber(stats.silver)}**`,
+    `Bronze **${formatNumber(stats.bronze)}**`,
+    `Total **${formatNumber(stats.total)}**`,
+    recentTitle ? `Recent: **${escapeMarkdown(recentTitle.titleName)}**` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function formatCompareLeaders(a, b) {
+  const stats = [
+    ["Platinum", "platinum"],
+    ["Gold", "gold"],
+    ["Silver", "silver"],
+    ["Bronze", "bronze"],
+    ["Total", "total"],
+  ];
+
+  return stats
+    .map(([label, key]) => {
+      const winner = compareStatWinner(a, b, key);
+      return `${label}: ${winner}`;
+    })
+    .join("\n");
+}
+
+function compareStatWinner(a, b, key) {
+  if (a[key] === b[key]) {
+    return `Tie at **${formatNumber(a[key])}**`;
+  }
+
+  const winner = a[key] > b[key] ? a : b;
+  const difference = Math.abs(a[key] - b[key]);
+  return `**${escapeMarkdown(winner.psnUsername)}** by **${formatNumber(difference)}**`;
+}
+
 function formatLevel(entry) {
   if (entry.trophyLevel === null) {
     return "Level unknown";
@@ -1561,10 +1958,19 @@ async function ensureDatabase(db) {
         updated_at INTEGER NOT NULL
       )`
     ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS psn_username_cache (
+        normalized_username TEXT PRIMARY KEY,
+        psn_username TEXT NOT NULL,
+        psn_id TEXT NOT NULL,
+        fetched_at INTEGER NOT NULL
+      )`
+    ),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_users_guild_id ON psn_users (guild_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_users_discord_guild ON psn_users (guild_id, discord_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_title_snapshots_psn_id ON psn_title_snapshots (psn_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_weekly_trophy_baselines_guild_id ON weekly_trophy_baselines (guild_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_username_cache_psn_id ON psn_username_cache (psn_id)"),
   ]);
 }
 
@@ -1912,8 +2318,14 @@ function escapeMarkdown(value) {
 }
 
 function getPublicErrorMessage(err) {
+  const message = String(err?.message || "");
+
   if (isPsnAuthError(err)) {
     return "PSN authentication failed. Refresh the Cloudflare secret PSN_NPSSO, then try again.";
+  }
+
+  if (message.startsWith("Could not find PSN username")) {
+    return message;
   }
 
   return "Something went wrong while handling that command.";

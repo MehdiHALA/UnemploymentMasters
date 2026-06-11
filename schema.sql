@@ -68,7 +68,15 @@ CREATE TABLE IF NOT EXISTS job_state (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS psn_username_cache (
+  normalized_username TEXT PRIMARY KEY,
+  psn_username TEXT NOT NULL,
+  psn_id TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_psn_users_guild_id ON psn_users (guild_id);
 CREATE INDEX IF NOT EXISTS idx_psn_users_discord_guild ON psn_users (guild_id, discord_id);
 CREATE INDEX IF NOT EXISTS idx_psn_title_snapshots_psn_id ON psn_title_snapshots (psn_id);
 CREATE INDEX IF NOT EXISTS idx_weekly_trophy_baselines_guild_id ON weekly_trophy_baselines (guild_id);
+CREATE INDEX IF NOT EXISTS idx_psn_username_cache_psn_id ON psn_username_cache (psn_id);
