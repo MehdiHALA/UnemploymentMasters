@@ -7,12 +7,20 @@
   },
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js"
+    "check": "node --check index.js && node --check src/worker.js && node --check scripts/register-commands.js",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:register": "node scripts/register-commands.js",
+    "cf:schema": "wrangler d1 execute psn-trophy-bot-db --remote --file schema.sql"
   },
   "dependencies": {
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
     "pg": "^8.16.0",
-    "psn-api": "^2.13.0"
+    "psn-api": "^2.13.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "wrangler": "^4.100.0"
   }
 }

@@ -1,0 +1,11 @@
+name = "psn-trophy-bot"
+main = "src/worker.js"
+compatibility_date = "2026-06-11"
+
+[vars]
+DISCORD_PUBLIC_KEY = "16e9e7469914be61ec1a28a0afe45344730efec37ee7d53c8b4a4da6d59f5e6d"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "psn-trophy-bot-db"
+database_id = "42697bb6-d855-4756-a656-54432dcd8a45"
