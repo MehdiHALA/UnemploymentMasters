@@ -2,8 +2,12 @@
   "name": "psn-discord-bot",
   "version": "1.0.0",
   "main": "index.js",
+  "engines": {
+    "node": ">=20 <23"
+  },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node --check index.js"
   },
   "dependencies": {
     "discord.js": "^14.19.3",
