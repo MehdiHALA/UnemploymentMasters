@@ -75,6 +75,18 @@ CREATE TABLE IF NOT EXISTS psn_username_cache (
   fetched_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS psn_auth_state (
+  key TEXT PRIMARY KEY,
+  access_token TEXT,
+  access_token_expires_at INTEGER,
+  id_token TEXT,
+  refresh_token TEXT,
+  refresh_token_expires_at INTEGER,
+  scope TEXT,
+  token_type TEXT,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_psn_users_guild_id ON psn_users (guild_id);
 CREATE INDEX IF NOT EXISTS idx_psn_users_discord_guild ON psn_users (guild_id, discord_id);
 CREATE INDEX IF NOT EXISTS idx_psn_title_snapshots_psn_id ON psn_title_snapshots (psn_id);

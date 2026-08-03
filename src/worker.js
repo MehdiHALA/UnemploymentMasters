@@ -6,6 +6,9 @@ const PSN_SEARCH_BASE_URL = "https://m.np.playstation.com/api/search";
 const PSN_TROPHY_BASE_URL = "https://m.np.playstation.com/api/trophy";
 const PSN_USER_LEGACY_BASE_URL = "https://us-prof.np.community.playstation.net/userProfile/v1/users";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PSN_AUTH_STATE_KEY = "primary";
+const PSN_ACCESS_TOKEN_REFRESH_GRACE_MS = 5 * 60 * 1000;
 const PSN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PSN_USERNAME_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const RECENT_TITLES_DEFAULT_LIMIT = 5;
@@ -323,7 +326,7 @@ async function addPsn(interaction, env) {
     return;
   }
 
-  const tokens = await getPsnTokens(env.PSN_NPSSO);
+  const tokens = await getPsnTokens(env);
   const psnId = await findPsnAccountId(tokens, psnUsername);
 
   if (!psnId) {
@@ -530,7 +533,7 @@ async function recent(interaction, env) {
   titles.sort(compareTitleSnapshots);
 
   if (titles.length === 0) {
-    await editOriginalResponse(interaction, "Could not load recent PSN games yet. If this keeps happening, refresh PSN_NPSSO.");
+    await editOriginalResponse(interaction, "Could not load recent PSN games yet. If this keeps happening, refresh the Cloudflare secret PSN_NPSSO.");
     return;
   }
 
@@ -621,7 +624,7 @@ async function compare(interaction, env) {
     return;
   }
 
-  const tokens = await getPsnTokens(env.PSN_NPSSO);
+  const tokens = await getPsnTokens(env);
   const [row1, row2] = await Promise.all([
     resolvePsnUserByUsername(env, tokens, username1, interaction.guild_id),
     resolvePsnUserByUsername(env, tokens, username2, interaction.guild_id),
@@ -1102,8 +1105,26 @@ async function resetWeeklyBaselinesForGuild(env, guildId, entries) {
 }
 
 async function runHourlyJobs(env) {
+  await refreshPsnAuthKeepalive(env);
   await postNpssoExpiryReminder(env);
   await scanPlatinumAlerts(env);
+}
+
+async function refreshPsnAuthKeepalive(env) {
+  try {
+    await ensureDatabase(env.DB);
+    await getPsnTokens(env);
+    await setJobState(env.DB, "psn_auth_last_success_at", new Date().toISOString());
+    await setJobState(env.DB, "psn_auth_last_error", "");
+  } catch (err) {
+    try {
+      await setJobState(env.DB, "psn_auth_last_error", String(err?.message || err || "unknown PSN auth error"));
+    } catch (stateErr) {
+      console.warn("Could not record PSN auth keepalive failure:", stateErr);
+    }
+
+    console.warn("PSN auth keepalive failed:", err);
+  }
 }
 
 async function scanPlatinumAlerts(env) {
@@ -1156,7 +1177,7 @@ async function scanPlatinumAlerts(env) {
         }
       } catch (err) {
         if (isPsnAuthError(err)) {
-          console.warn("Skipping platinum scan because PSN authentication failed. Refresh PSN_NPSSO.");
+          console.warn("Skipping platinum scan because PSN authentication failed. Refresh PSN_NPSSO if auto-refresh cannot recover.");
           return;
         }
 
@@ -1187,21 +1208,14 @@ async function postNpssoExpiryReminder(env) {
       return;
     }
 
-    const daysRemaining = Math.ceil((NPSSO_EXPIRES_AT_MS - now) / (24 * 60 * 60 * 1000));
-    let reminderKey = "";
+    const decision = getPsnAuthReminderDecision(await getPsnAuthRecord(env.DB), now);
 
-    if (daysRemaining <= 0) {
-      reminderKey = "expired";
-    } else if (NPSSO_REMINDER_THRESHOLDS.includes(daysRemaining)) {
-      reminderKey = `${daysRemaining}d`;
-    }
-
-    if (!reminderKey) {
+    if (!decision) {
       await setJobState(env.DB, "npsso_expiry_last_check_date", utcDate);
       return;
     }
 
-    const sentKey = `npsso_expiry_reminder_${reminderKey}`;
+    const sentKey = `psn_auth_reminder_${decision.key}`;
     const alreadySent = await getJobState(env.DB, sentKey);
 
     if (alreadySent) {
@@ -1212,7 +1226,7 @@ async function postNpssoExpiryReminder(env) {
     await postChannelMessage(
       env,
       OUTPLAYED_TRASH_REMINDER_CHANNEL_ID,
-      buildNpssoReminderPayload(daysRemaining)
+      buildPsnAuthReminderPayload(decision)
     );
     await setJobState(env.DB, sentKey, new Date(now).toISOString());
     await setJobState(env.DB, "npsso_expiry_last_check_date", utcDate);
@@ -1610,9 +1624,24 @@ function buildComparePayload(stats1, stats2, recent1, recent2) {
   };
 }
 
-function buildNpssoReminderPayload(daysRemaining) {
-  const expired = daysRemaining <= 0;
-  const title = expired ? "PSN_NPSSO has expired or expires today" : `PSN_NPSSO expires in ${daysRemaining} day${daysRemaining === 1 ? "" : "s"}`;
+function buildPsnAuthReminderPayload(decision) {
+  const expired = decision.daysRemaining <= 0;
+  const expiresDate = new Date(decision.expiresAt).toISOString().slice(0, 10);
+  const isRefreshReminder = decision.kind === "refresh";
+  const titleSubject = isRefreshReminder ? "PSN refresh token" : "Fallback NPSSO";
+  const title = expired
+    ? `${titleSubject} has expired`
+    : `${titleSubject} expires in ${decision.daysRemaining} day${decision.daysRemaining === 1 ? "" : "s"}`;
+  const authDetail = isRefreshReminder
+    ? [
+        `Stored refresh token expiry: **${expiresDate}**.`,
+        "The bot auto-refreshes PSN access tokens hourly, but Sony still gives the refresh token its own expiry.",
+        "Refresh the NPSSO token and update `PSN_NPSSO` before that date so the bot can seed a fresh refresh token.",
+      ]
+    : [
+        `Current NPSSO estimate: **${expiresDate}**.`,
+        "Automatic PSN refresh is not seeded yet, so refresh the NPSSO token and update the Cloudflare Worker secret `PSN_NPSSO`.",
+      ];
 
   return {
     embeds: [
@@ -1621,9 +1650,8 @@ function buildNpssoReminderPayload(daysRemaining) {
         color: expired ? 0xd83c3e : 0xd6af36,
         description: [
           `Reminder for Outplayed Trash.`,
-          `Current estimate: **August 10, 2026**.`,
+          ...authDetail,
           "",
-          "Refresh the NPSSO token, then update the Cloudflare Worker secret `PSN_NPSSO`.",
           "After updating the secret, redeploy is not required for Worker secrets.",
         ].join("\n"),
         fields: [
@@ -1966,6 +1994,19 @@ async function ensureDatabase(db) {
         fetched_at INTEGER NOT NULL
       )`
     ),
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS psn_auth_state (
+        key TEXT PRIMARY KEY,
+        access_token TEXT,
+        access_token_expires_at INTEGER,
+        id_token TEXT,
+        refresh_token TEXT,
+        refresh_token_expires_at INTEGER,
+        scope TEXT,
+        token_type TEXT,
+        updated_at INTEGER NOT NULL
+      )`
+    ),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_users_guild_id ON psn_users (guild_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_users_discord_guild ON psn_users (guild_id, discord_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_psn_title_snapshots_psn_id ON psn_title_snapshots (psn_id)"),
@@ -1979,20 +2020,164 @@ function createPsnTokenProvider(env) {
 
   return async () => {
     if (!tokenPromise) {
-      tokenPromise = getPsnTokens(env.PSN_NPSSO);
+      tokenPromise = getPsnTokens(env);
     }
 
     return tokenPromise;
   };
 }
 
-async function getPsnTokens(npsso) {
-  if (!npsso) {
+async function getPsnTokens(env) {
+  if (!env) {
+    throw new Error("Missing PSN environment");
+  }
+
+  if (env.DB) {
+    await ensureDatabase(env.DB);
+    const stored = await getPsnAuthRecord(env.DB);
+    const action = selectPsnAuthAction(stored);
+
+    if (action === "access") {
+      return authTokensFromRecord(stored);
+    }
+
+    if (action === "refresh") {
+      try {
+        const tokens = await exchangeRefreshTokenForAuthTokens(stored.refresh_token);
+        await storePsnAuthRecord(env.DB, buildPsnAuthRecord(tokens));
+        return tokens;
+      } catch (err) {
+        console.warn("PSN refresh token exchange failed, falling back to NPSSO:", err);
+      }
+    }
+  }
+
+  if (!env.PSN_NPSSO) {
     throw new Error("Missing PSN_NPSSO");
   }
 
-  const code = await exchangeNpssoForAccessCode(npsso);
-  return exchangeAccessCodeForAuthTokens(code);
+  const code = await exchangeNpssoForAccessCode(env.PSN_NPSSO);
+  const tokens = await exchangeAccessCodeForAuthTokens(code);
+
+  if (env.DB) {
+    await storePsnAuthRecord(env.DB, buildPsnAuthRecord(tokens));
+  }
+
+  return tokens;
+}
+
+export function selectPsnAuthAction(record, now = Date.now()) {
+  if (record?.access_token && Number(record.access_token_expires_at || 0) > now + PSN_ACCESS_TOKEN_REFRESH_GRACE_MS) {
+    return "access";
+  }
+
+  if (record?.refresh_token && Number(record.refresh_token_expires_at || 0) > now) {
+    return "refresh";
+  }
+
+  return "npsso";
+}
+
+export function buildPsnAuthRecord(tokens, now = Date.now()) {
+  return {
+    key: PSN_AUTH_STATE_KEY,
+    access_token: tokens.accessToken || "",
+    access_token_expires_at: now + Math.max(0, Number(tokens.expiresIn || 0)) * 1000,
+    id_token: tokens.idToken || "",
+    refresh_token: tokens.refreshToken || "",
+    refresh_token_expires_at: now + Math.max(0, Number(tokens.refreshTokenExpiresIn || 0)) * 1000,
+    scope: tokens.scope || "",
+    token_type: tokens.tokenType || "",
+    updated_at: now,
+  };
+}
+
+export function getPsnAuthReminderDecision(storedAuth, now = Date.now()) {
+  const refreshExpiresAt = Number(storedAuth?.refresh_token_expires_at || 0);
+
+  if (storedAuth?.refresh_token && refreshExpiresAt > 0) {
+    return getReminderDecisionForExpiry("refresh", refreshExpiresAt, now);
+  }
+
+  return getReminderDecisionForExpiry("npsso", NPSSO_EXPIRES_AT_MS, now);
+}
+
+function getReminderDecisionForExpiry(kind, expiresAt, now) {
+  const daysRemaining = Math.ceil((expiresAt - now) / DAY_MS);
+  let thresholdKey = "";
+
+  if (daysRemaining <= 0) {
+    thresholdKey = "expired";
+  } else if (NPSSO_REMINDER_THRESHOLDS.includes(daysRemaining)) {
+    thresholdKey = `${daysRemaining}d`;
+  }
+
+  if (!thresholdKey) {
+    return null;
+  }
+
+  const expiresDate = new Date(expiresAt).toISOString().slice(0, 10);
+
+  return {
+    kind,
+    key: `${kind}_${expiresDate}_${thresholdKey}`,
+    daysRemaining,
+    expiresAt,
+  };
+}
+
+function authTokensFromRecord(record) {
+  return {
+    accessToken: record.access_token,
+    expiresIn: Math.max(0, Math.floor((Number(record.access_token_expires_at || 0) - Date.now()) / 1000)),
+    idToken: record.id_token,
+    refreshToken: record.refresh_token,
+    refreshTokenExpiresIn: Math.max(0, Math.floor((Number(record.refresh_token_expires_at || 0) - Date.now()) / 1000)),
+    scope: record.scope,
+    tokenType: record.token_type,
+  };
+}
+
+async function getPsnAuthRecord(db) {
+  return db.prepare("SELECT * FROM psn_auth_state WHERE key = ?").bind(PSN_AUTH_STATE_KEY).first();
+}
+
+async function storePsnAuthRecord(db, record) {
+  await db.prepare(
+    `INSERT INTO psn_auth_state (
+      key,
+      access_token,
+      access_token_expires_at,
+      id_token,
+      refresh_token,
+      refresh_token_expires_at,
+      scope,
+      token_type,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      access_token = excluded.access_token,
+      access_token_expires_at = excluded.access_token_expires_at,
+      id_token = excluded.id_token,
+      refresh_token = excluded.refresh_token,
+      refresh_token_expires_at = excluded.refresh_token_expires_at,
+      scope = excluded.scope,
+      token_type = excluded.token_type,
+      updated_at = excluded.updated_at`
+  )
+    .bind(
+      record.key,
+      record.access_token,
+      record.access_token_expires_at,
+      record.id_token,
+      record.refresh_token,
+      record.refresh_token_expires_at,
+      record.scope,
+      record.token_type,
+      record.updated_at
+    )
+    .run();
 }
 
 async function exchangeNpssoForAccessCode(npsso) {
@@ -2047,6 +2232,37 @@ async function exchangeAccessCodeForAuthTokens(accessCode) {
   }
 
   const raw = await res.json();
+  return normalizePsnAuthTokens(raw);
+}
+
+async function exchangeRefreshTokenForAuthTokens(refreshToken) {
+  const res = await fetch(`${PSN_AUTH_BASE_URL}/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization:
+        "Basic MDk1MTUxNTktNzIzNy00MzcwLTliNDAtMzgwNmU2N2MwODkxOnVjUGprYTV0bnRCMktxc1A=",
+    },
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+      token_format: "jwt",
+      scope: "psn:mobile.v2.core psn:clientapp",
+    }).toString(),
+  });
+
+  if (!res.ok) {
+    throw new Error(`PSN refresh token exchange failed: ${res.status}`);
+  }
+
+  const raw = await res.json();
+  return normalizePsnAuthTokens(raw);
+}
+
+function normalizePsnAuthTokens(raw) {
+  if (!raw?.access_token || !raw?.refresh_token) {
+    throw new Error("PSN token exchange returned incomplete tokens.");
+  }
 
   return {
     accessToken: raw.access_token,
@@ -2321,7 +2537,7 @@ function getPublicErrorMessage(err) {
   const message = String(err?.message || "");
 
   if (isPsnAuthError(err)) {
-    return "PSN authentication failed. Refresh the Cloudflare secret PSN_NPSSO, then try again.";
+    return "PSN authentication failed. The bot auto-refreshes PSN tokens when possible; if this keeps happening, refresh the Cloudflare secret PSN_NPSSO.";
   }
 
   if (message.startsWith("Could not find PSN username")) {
@@ -2337,6 +2553,8 @@ function isPsnAuthError(err) {
   return (
     message.includes("psn_npsso") ||
     message.includes("psn token exchange failed") ||
+    message.includes("psn refresh token exchange") ||
+    message.includes("psn token exchange returned") ||
     message.includes("psn authentication") ||
     message.includes("psn access code") ||
     message.includes("refresh psn_npsso")
