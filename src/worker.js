@@ -86,6 +86,11 @@ export const commands = [
     type: 1,
   },
   {
+    name: "support",
+    description: "Support the free PSN Trophy Bot",
+    type: 1,
+  },
+  {
     name: "profile",
     description: "Show saved PSN trophy profile stats",
     type: 1,
@@ -276,6 +281,11 @@ async function handleCommand(interaction, env) {
       return;
     }
 
+    if (commandName === "support") {
+      await support(interaction, env);
+      return;
+    }
+
     if (commandName === "profile") {
       await profile(interaction, env);
       return;
@@ -410,6 +420,10 @@ async function leaderboard(interaction, env) {
   }
 
   await editOriginalResponse(interaction, buildLeaderboardPayload(data, { title: "Server Trophy Standings" }));
+}
+
+async function support(interaction, env) {
+  await editOriginalResponse(interaction, buildSupportPayload({ supportUrl: env.SUPPORT_URL }));
 }
 
 async function profile(interaction, env) {
@@ -1525,6 +1539,40 @@ function buildLeaderboardPayload(data, { title }) {
   };
 }
 
+export function buildSupportPayload({ supportUrl } = {}) {
+  const cleanSupportUrl = normalizeSupportUrl(supportUrl);
+  const description = [
+    "PSN Trophy Bot stays free for every server.",
+    "Support helps cover maintenance, PSN auth upkeep, Discord review work, and new trophy features.",
+    cleanSupportUrl ? "Any support is optional and appreciated." : "The support link is still being set up.",
+  ].join("\n");
+
+  return {
+    embeds: [
+      {
+        title: "Support PSN Trophy Bot",
+        color: PSN_BLUE,
+        description,
+      },
+    ],
+    components: cleanSupportUrl
+      ? [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 5,
+                label: "Support the bot",
+                url: cleanSupportUrl,
+              },
+            ],
+          },
+        ]
+      : undefined,
+  };
+}
+
 function buildWeeklyPayload(leaderboardData, moversData) {
   const leaderboardPayload = buildLeaderboardPayload(leaderboardData, { title: "Weekly Trophy Standings" });
   const moversPayload = buildMoversPayload(moversData, { compact: true });
@@ -2413,6 +2461,21 @@ function normalizeDiscordPayload(payload) {
     components: payload.components || undefined,
     allowed_mentions: payload.allowed_mentions || { parse: [] },
   };
+}
+
+function normalizeSupportUrl(value) {
+  const raw = String(value || "").trim();
+
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function getStringOption(interaction, name) {

@@ -47,6 +47,11 @@ const commands = [
     type: 1,
   },
   {
+    name: "support",
+    description: "Support the free PSN Trophy Bot",
+    type: 1,
+  },
+  {
     name: "profile",
     description: "Show saved PSN trophy profile stats",
     type: 1,
