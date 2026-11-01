@@ -3,6 +3,7 @@
 // accounts it tracks — more accounts just means each one is refreshed a little less often.
 
 import {
+  ALERT_MAX_AGE_MS,
   ALERT_TITLE_SCAN,
   DAY_MS,
   getSettings,
@@ -178,10 +179,13 @@ async function processAlerts(ctx, now, report) {
       { reserved: true }
     );
 
-    if (fresh.length === 0) continue;
+    // Catch-up after downtime: platinums earned long ago are recorded above but not announced
+    // as "new".
+    const recent = fresh.filter((title) => now - (Date.parse(title.lastUpdatedAt) || 0) <= ALERT_MAX_AGE_MS);
+    if (recent.length === 0) continue;
 
     const payload = ui.platinumAlertMessage(
-      { owner: account.psn_username, avatarUrl: account.avatar_url, titles: fresh, platinumCount: Number(account.platinum) },
+      { owner: account.psn_username, avatarUrl: account.avatar_url, titles: recent, platinumCount: Number(account.platinum) },
       { theme: ctx.theme }
     );
 

@@ -36,6 +36,8 @@ export const PLATINUMS_MAX_LIMIT = 10;
 export const PLATINUMS_SCAN_TITLES = 200;
 export const ALERT_TITLE_SCAN = 10;
 export const MAX_ALERTS_PER_ACCOUNT = 3;
+// Only platinums earned this recently are announced; older catch-up ones are recorded quietly.
+export const ALERT_MAX_AGE_MS = 48 * HOUR_MS;
 
 // Weekly posts go out Sundays 16:00 UTC; late runs may catch up for 48 hours.
 export const WEEKLY_POST_DAY = 0;
