@@ -751,14 +751,52 @@ test("a welcome queued straight in the database waits for the commands, then pos
   assert.deepEqual(bot.discord.guildCommands.get(PREMIUM_GUILD).map((c) => c.name), PREMIUM_COMMANDS.map((c) => c.name));
   assert.equal(bot.discord.posts.filter((p) => p.channelId === "bot-channel" && /now has Platinum/.test(allText(p.body))).length, 1, "same run");
 
+});
+
+test("a welcome waits while the server's bot channel is broken, and goes out once an admin sets one", async () => {
+  const bot = await createBot();
+  bot.seedAuth();
+  bot.seedAccounts(2, { guildId: PREMIUM_GUILD, cache: "fresh" });
+  bot.setWeeklyChannel(PREMIUM_GUILD, "deleted-channel", Date.now());
+  bot.db.sqlite.prepare("UPDATE guild_settings SET channel_error = 'unknown_channel' WHERE guild_id = ?").run(PREMIUM_GUILD);
+  bot.db.sqlite
+    .prepare("INSERT INTO premium_guilds (guild_id, source, granted_at, expires_at, welcome_status) VALUES (?, 'grant', ?, ?, 'pending')")
+    .run(PREMIUM_GUILD, Date.now(), Date.now() + 181 * DAY);
+  const welcomes = () => bot.discord.posts.filter((p) => /now has Platinum/.test(allText(p.body)));
+
+  await bot.cron();
+  await bot.cron();
+  assert.equal(welcomes().length, 0);
+  assert.equal(bot.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "pending", "still waiting");
+
+  const set = await bot.command("weeklyleaderboard", sub("set", [option("channel", "new-channel", 7)]), as(bot, 1, MANAGE, PREMIUM_GUILD));
+  assert.match(allText(set.final), /Weekly leaderboard is on/);
+  assert.equal(bot.db.row("SELECT channel_error FROM guild_settings WHERE guild_id = ?", PREMIUM_GUILD).channel_error, null);
+  await bot.cron();
+  assert.equal(welcomes().length, 1);
+  assert.equal(welcomes()[0].channelId, "new-channel");
+  assert.equal(bot.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "posted:new-channel");
+
   const quiet = await createBot();
   quiet.seedAuth();
   quiet.db.sqlite
     .prepare("INSERT INTO premium_guilds (guild_id, source, granted_at, expires_at, welcome_status) VALUES (?, 'grant', ?, NULL, 'pending')")
     .run(PREMIUM_GUILD, Date.now());
   await quiet.cron();
-  assert.equal(quiet.discord.posts.length, 0);
-  assert.equal(quiet.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "no_channel", "no bot channel set up there");
+  assert.equal(quiet.discord.posts.length, 0, "no bot channel set up there yet");
+  assert.equal(quiet.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "pending");
+
+  quiet.discord.channelStatus.set("locked", 403);
+  quiet.setWeeklyChannel(PREMIUM_GUILD, "locked", Date.now());
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await quiet.cron();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(quiet.db.row("SELECT channel_error FROM guild_settings").channel_error, "missing_access", "flagged like a failed weekly post");
+  assert.equal(quiet.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "pending");
 });
 
 test("once payments are connected, /support and Platinum-only replies offer Discord's buy button", async () => {

@@ -53,13 +53,15 @@ export function grantPremiumStatement(ctx, { guildId, source, note, now, expires
     .bind(guildId, source, note ?? null, now, expiresAt ?? null, announce ? "pending" : null);
 }
 
-// Servers with a welcome post waiting, plus where and how to post it.
+// Servers with a welcome post waiting and a working bot channel to post it in. Servers
+// without one keep waiting until an admin sets a channel (/weeklyleaderboard set).
 export async function getPendingWelcomes(ctx, now, limit) {
   const { results = [] } = await ctx.db
     .prepare(
-      `SELECT p.guild_id, p.expires_at, g.leaderboard_channel_id, g.channel_error, g.accent_color, g.emoji_json
-       FROM premium_guilds p LEFT JOIN guild_settings g ON g.guild_id = p.guild_id
+      `SELECT p.guild_id, p.expires_at, g.leaderboard_channel_id, g.accent_color, g.emoji_json
+       FROM premium_guilds p JOIN guild_settings g ON g.guild_id = p.guild_id
        WHERE p.welcome_status = 'pending' AND (p.expires_at IS NULL OR p.expires_at > ?1)
+         AND g.leaderboard_channel_id IS NOT NULL AND g.leaderboard_channel_id != '' AND g.channel_error IS NULL
        LIMIT ?2`
     )
     .bind(now, limit)

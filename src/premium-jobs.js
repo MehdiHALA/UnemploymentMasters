@@ -124,7 +124,9 @@ export async function directoryStage(ctx, now, premium, updates) {
 
 // ---------------------------------------------------------------------------------------
 // One-time welcome post for servers granted Platinum with `announce`, sent once their
-// Platinum commands are registered (so everything the post mentions is there).
+// Platinum commands are registered (so everything the post mentions is there) and they have
+// a working bot channel. If posting fails for good, the channel is flagged like a failed
+// weekly post, and the welcome waits until an admin sets a channel again.
 
 export async function welcomeStage(ctx, now, premium) {
   if (!ctx.env.DISCORD_BOT_TOKEN || ctx.budget.remaining() < 4) return;
@@ -135,10 +137,6 @@ export async function welcomeStage(ctx, now, premium) {
     const registered = /^[0-9a-f]{16}$/.test(premium.commandState.get(`commands_hash:guild:${row.guild_id}`) || "");
     if (!registered) continue;
 
-    if (!row.leaderboard_channel_id || row.channel_error) {
-      await pdb.welcomeStatusStatement(ctx, row.guild_id, "no_channel").run();
-      continue;
-    }
     const result = await postChannelMessage(
       ctx,
       row.leaderboard_channel_id,
@@ -147,7 +145,7 @@ export async function welcomeStage(ctx, now, premium) {
     if (result.ok) {
       await pdb.welcomeStatusStatement(ctx, row.guild_id, `posted:${row.leaderboard_channel_id}`).run();
     } else if (LASTING_POST_ERRORS.includes(result.error)) {
-      await pdb.welcomeStatusStatement(ctx, row.guild_id, `failed:${result.error}`).run();
+      await db.channelErrorStatement(ctx, row.guild_id, result.error, now).run();
     }
   }
 }

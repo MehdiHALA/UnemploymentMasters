@@ -381,13 +381,10 @@ export function adminStatsView({ stats, names, guildCount, premiumIds }) {
   );
 }
 
-const WELCOME_LABELS = { pending: "welcome post queued", no_channel: "no bot channel for the welcome post" };
-
 function welcomeLabel(status) {
-  if (!status) return "";
-  if (status.startsWith("posted:")) return ` · welcomed in <#${status.slice(7)}>`;
-  if (status.startsWith("failed:")) return " · welcome post failed";
-  return WELCOME_LABELS[status] ? ` · ${WELCOME_LABELS[status]}` : "";
+  if (status === "pending") return " · welcome post waiting for a working bot channel";
+  if (status?.startsWith("posted:")) return ` · welcomed in <#${status.slice(7)}>`;
+  return "";
 }
 
 export function adminListView({ rows, names }) {
