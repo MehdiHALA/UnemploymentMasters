@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import worker from "../../src/worker.js";
 import { ensureSchema, resetSchemaCacheForTests } from "../../src/db.js";
 import { clearIsolateTokensForTests } from "../../src/psn.js";
+import { clearPremiumCacheForTests } from "../../src/premium.js";
 import { resetThrottlesForTests } from "../../src/commands.js";
 import { Budget, createContext } from "../../src/runtime.js";
 import { validateMessage } from "./discord-validate.mjs";
@@ -192,6 +193,7 @@ export function createPsnWorld() {
     authCalls: 0,
     forceStatus: null,
     perOwnerLimit: 300,
+    rarity: new Map(),
 
     add(account) {
       world.accounts.set(account.psnId, account);
@@ -266,6 +268,27 @@ export function createPsnWorld() {
         return json({ trophyTitles: titles, totalItemCount: account.titles.length, ...(offset + limit < account.titles.length ? { nextOffset: offset + limit } : {}) });
       }
 
+      match = path.match(/\/api\/trophy\/v1\/users\/([^/]+)\/npCommunicationIds\/([^/]+)\/trophyGroups$/);
+      if (match) {
+        const account = world.accounts.get(decodeURIComponent(match[1]));
+        if (!account) return json({ error: { message: "not found" } }, 404);
+        if (account.private) return json({ error: { message: "Not permitted by access control" } }, 403);
+        const title = account.titles.find((t) => t.npCommunicationId === decodeURIComponent(match[2]));
+        if (!title) return json({ error: { message: "Resource not found" } }, 404);
+        return json({ trophySetVersion: "01.00", hiddenFlag: false, progress: title.progress, earnedTrophies: title.earnedTrophies, trophyGroups: [], lastUpdatedDateTime: title.lastUpdatedDateTime });
+      }
+
+      match = path.match(/\/api\/trophy\/v1\/users\/([^/]+)\/npCommunicationIds\/([^/]+)\/trophyGroups\/all\/trophies$/);
+      if (match) {
+        const rate = world.rarity.get(decodeURIComponent(match[2])) ?? 2.3;
+        return json({
+          trophies: [
+            { trophyId: 0, trophyType: "platinum", earned: true, trophyRare: 0, trophyEarnedRate: String(rate) },
+            { trophyId: 1, trophyType: "gold", earned: true, trophyRare: 2, trophyEarnedRate: "40.0" },
+          ],
+        });
+      }
+
       match = path.match(/\/api\/userProfile\/v1\/internal\/users\/([^/]+)\/profiles$/);
       if (match) {
         const account = world.accounts.get(decodeURIComponent(match[1]));
@@ -311,16 +334,82 @@ export function createDiscord() {
     rejected: [],
     channelStatus: new Map(),
     rejectImages: false,
+    fileEdits: [],
+    commandPuts: [],
+    globalCommands: null,
+    guildCommands: new Map(),
+    commandStatus: new Map(),
+    globalCommandStatus: 200,
+    guildNames: new Map(),
+    guildCount: 321,
+    roleOps: [],
+    roleStatus: null,
+    goneMembers: new Set(),
+    entitlements: [],
+    entitlementCalls: 0,
+    // Servers the bot is in, for GET /users/@me/guilds: { id, name, approximate_member_count }.
+    botGuilds: [],
+    guildListCalls: 0,
 
-    handle(url, method, init) {
-      const body = init.body ? JSON.parse(init.body) : null;
+    async handle(url, method, init) {
       const parts = url.pathname.split("/").filter(Boolean);
+      let body = null;
+      let file = null;
+      if (init.body instanceof FormData) {
+        body = JSON.parse(init.body.get("payload_json"));
+        const blob = init.body.get("files[0]");
+        file = blob ? { name: blob.name, text: await blob.text() } : null;
+      } else {
+        body = init.body ? JSON.parse(init.body) : null;
+      }
+
+      if (parts[2] === "applications") {
+        if (parts[4] === "entitlements") {
+          discord.entitlementCalls += 1;
+          const skus = (url.searchParams.get("sku_ids") || "").split(",");
+          return json(discord.entitlements.filter((e) => skus.includes(e.sku_id)));
+        }
+        if (method === "GET") return json({ id: "app", name: "PSN Trophy Bot", approximate_guild_count: discord.guildCount });
+        const guildId = parts[4] === "guilds" ? parts[5] : null;
+        const status = guildId ? discord.commandStatus.get(guildId) || 200 : discord.globalCommandStatus;
+        if (status === 400) return json({ message: "Invalid Form Body", code: 50035 }, 400);
+        if (status !== 200) return json({ message: "Missing Access", code: 50001 }, status);
+        if (!Array.isArray(body)) return json({ message: "Invalid Form Body" }, 400);
+        discord.commandPuts.push({ guildId, names: body.map((c) => c.name) });
+        if (guildId) discord.guildCommands.set(guildId, body);
+        else discord.globalCommands = body;
+        return json(body.map((c, i) => ({ id: String(i), ...c })));
+      }
+
+      if (parts[2] === "users" && parts[4] === "guilds") {
+        discord.guildListCalls += 1;
+        const after = BigInt(url.searchParams.get("after") || 0);
+        const limit = Number(url.searchParams.get("limit") || 200);
+        const sorted = [...discord.botGuilds].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+        return json(sorted.filter((g) => BigInt(g.id) > after).slice(0, limit));
+      }
+
+      if (parts[2] === "guilds" && parts[4] === "members") {
+        const [guildId, , userId, , roleId] = parts.slice(3);
+        discord.roleOps.push({ guildId, userId, roleId, add: method === "PUT" });
+        if (discord.goneMembers.has(userId)) return json({ message: "Unknown Member", code: 10007 }, 404);
+        if (discord.roleStatus) return json({ message: "Missing Permissions", code: 50013 }, discord.roleStatus);
+        return new Response(null, { status: 204 });
+      }
+
+      if (parts[2] === "guilds" && method === "GET") {
+        return json({ id: parts[3], name: discord.guildNames.get(parts[3]) || `Server ${parts[3].slice(-4)}` });
+      }
 
       if (parts[2] === "webhooks") {
         const token = parts[4];
         if (method === "DELETE") {
           discord.deletes.push({ token });
           return new Response(null, { status: 204 });
+        }
+        if (file) {
+          discord.fileEdits.push({ token, body, file });
+          return json({ id: "message" });
         }
         const errors = validateMessage(body, { edit: method === "PATCH" });
         if (discord.rejectImages && hasImages(body)) errors.push("simulated: Discord rejected the media");
@@ -336,6 +425,7 @@ export function createDiscord() {
         const channelId = parts[3];
         const status = discord.channelStatus.get(channelId) || 200;
         if (status === 404) return json({ message: "Unknown Channel", code: 10003 }, 404);
+        if (status >= 500) return json({ message: "Service Unavailable" }, status);
         if (status !== 200) return json({ message: "Missing Access", code: 50001 }, status);
         const errors = validateMessage(body);
         if (discord.rejectImages && hasImages(body)) errors.push("simulated: Discord rejected the media");
@@ -362,6 +452,7 @@ export async function createBot({ latency = "far", limit = 50, env: envOverrides
   resetSchemaCacheForTests();
   clearIsolateTokensForTests();
   resetThrottlesForTests();
+  clearPremiumCacheForTests();
 
   const timing = LATENCY[latency];
   const db = new FakeD1(timing);
@@ -427,9 +518,17 @@ export async function createBot({ latency = "far", limit = 50, env: envOverrides
       { waitUntil: (promise) => promises.push(promise) }
     );
 
-    const reply = await res.json();
+    let reply;
+    if ((res.headers.get("content-type") || "").includes("multipart/form-data")) {
+      const form = await res.formData();
+      reply = JSON.parse(form.get("payload_json"));
+      const blob = form.get("files[0]");
+      reply.file = blob ? { name: blob.name, text: await blob.text() } : null;
+    } else {
+      reply = await res.json();
+    }
     const replyErrors = [];
-    if ([4, 7].includes(reply.type)) replyErrors.push(...validateMessage(reply.data));
+    if ([4, 7].includes(reply.type) && !reply.file) replyErrors.push(...validateMessage(reply.data));
     if (reply.type === 5 && Number(reply.data?.flags || 0) & ~64) replyErrors.push("deferred reply may only set EPHEMERAL");
 
     await Promise.all(promises);
@@ -470,6 +569,17 @@ export async function createBot({ latency = "far", limit = 50, env: envOverrides
       await worker.scheduled({ cron: "*/5 * * * *", scheduledTime }, env, { waitUntil: (promise) => promises.push(promise) });
       const [report] = await Promise.all(promises);
       return { meter: used, report };
+    },
+
+    // Forget per-isolate caches, as if the next request landed on a fresh isolate.
+    clearCaches() {
+      clearPremiumCacheForTests();
+    },
+
+    grantPremium(guildId = "g1", { expiresAt = null, source = "grant" } = {}) {
+      db.sqlite
+        .prepare("INSERT OR REPLACE INTO premium_guilds (guild_id, source, note, granted_at, expires_at) VALUES (?, ?, 'test', ?, ?)")
+        .run(guildId, source, Date.now(), expiresAt);
     },
 
     seedAuth({ owner = "npsso-primary", key = "primary", accessValidMs = 50 * 60 * 1000 } = {}) {

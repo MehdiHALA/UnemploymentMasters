@@ -64,6 +64,30 @@ test("platinum alerts fire once for an existing game and a brand-new game", asyn
   assert.equal(bot.discord.posts.filter((post) => /New platinum/.test(allText(post.body))).length, 1, "never repeats");
 });
 
+test("catch-up platinums earned days ago are recorded but not announced as new", async () => {
+  const bot = await createBot();
+  bot.seedAuth();
+  bot.setWeeklyChannel("g1", "trophy-channel", Date.now());
+  const [account] = bot.seedAccounts(1, { cache: "fresh", overrides: () => ({ titles: makeTitles(12, { platinumEvery: 100 }) }) });
+
+  const noPlatinum = (title) => ({ ...title, progress: 40, earnedTrophies: { ...title.earnedTrophies, platinum: 0 } });
+  account.titles = [
+    ...account.titles.slice(0, 3).map(noPlatinum), // played more recently, no platinum
+    { ...makeTitles(1, { prefix: "Old Hunt", newestAt: Date.now() - 5 * DAY })[0], npCommunicationId: "NPWR77777_00" },
+    ...account.titles.slice(3).map(noPlatinum),
+  ];
+  account.trophies.platinum += 1;
+  bot.db.sqlite.prepare("UPDATE psn_trophy_cache SET next_refresh_at = 0 WHERE psn_id = ?").run(account.psnId);
+
+  await bot.cron();
+  await bot.cron();
+
+  assert.equal(bot.discord.posts.filter((post) => /New platinum/.test(allText(post.body))).length, 0);
+  assert.ok(bot.db.row("SELECT * FROM psn_platinum_alerts WHERE np_communication_id = 'NPWR77777_00'"), "recorded so it never alerts later");
+  const row = bot.db.row("SELECT platinum, alert_platinum FROM psn_trophy_cache WHERE psn_id = ?", account.psnId);
+  assert.equal(row.alert_platinum, row.platinum, "marked as handled");
+});
+
 test("linking an account never announces its old platinums", async () => {
   const bot = await createBot();
   bot.seedAuth();

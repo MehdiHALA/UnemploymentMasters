@@ -1,8 +1,11 @@
 import { DEFERRED_WORK_BUDGET_MS } from "./config.js";
 import { autocompleteHandlers, componentHandlers, handlers, normalizeSupportUrl } from "./commands.js";
+import { premiumAutocompleteHandlers, premiumComponentHandlers, premiumHandlers } from "./premium-commands.js";
+import { loadGuildContext } from "./premium.js";
 import { ensureSchema } from "./db.js";
 import {
   editOriginal,
+  editOriginalWithFile,
   interactionResponse,
   InteractionType,
   jsonResponse,
@@ -14,7 +17,9 @@ import {
 } from "./discord.js";
 import { runScheduled } from "./jobs.js";
 import { PsnError } from "./psn.js";
-import { BudgetExceededError, createContext, logEvent, sleep, UserError } from "./runtime.js";
+import { BudgetExceededError, createContext, logEvent, PremiumRequiredError, sleep, UserError } from "./runtime.js";
+import { PAGES } from "./pages.js";
+import { premiumOnlyView } from "./premium-ui.js";
 import { createTheme, noticeView, supportView } from "./ui.js";
 
 export { commands } from "./commands.js";
@@ -29,6 +34,9 @@ const TIMED_OUT = Symbol("timed-out");
 export default {
   async fetch(request, env, executionCtx) {
     if (request.method === "GET") {
+      // Public Terms of Service and Privacy Policy pages, for the Discord developer portal.
+      const page = PAGES[new URL(request.url).pathname];
+      if (page) return new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8" } });
       return jsonResponse({ ok: true, service: "psn-trophy-bot" });
     }
 
@@ -88,7 +96,7 @@ function handleCommand(interaction, env, executionCtx) {
     );
   }
 
-  const handler = handlers[interaction.data?.name];
+  const handler = handlers[interaction.data?.name] || premiumHandlers[interaction.data?.name];
 
   if (!handler) {
     return interactionResponse(ResponseType.MESSAGE, noticeView({ tone: "warning", title: "Unknown command", body: "Try again in a minute." }));
@@ -114,7 +122,7 @@ function handleCommand(interaction, env, executionCtx) {
 
 function handleComponent(interaction, env, executionCtx) {
   const [namespace, action = "", arg = ""] = String(interaction.data?.custom_id || "").split(":");
-  const handler = componentHandlers[namespace];
+  const handler = componentHandlers[namespace] || premiumComponentHandlers[namespace];
 
   if (!handler || !interaction.guild_id) {
     return interactionResponse(ResponseType.MESSAGE, noticeView({ tone: "info", title: "This button has expired", body: "Run the command again." }));
@@ -135,7 +143,7 @@ function handleComponent(interaction, env, executionCtx) {
 }
 
 async function handleAutocomplete(interaction, env) {
-  const handler = autocompleteHandlers[interaction.data?.name];
+  const handler = autocompleteHandlers[interaction.data?.name] || premiumAutocompleteHandlers[interaction.data?.name];
 
   if (!handler || !interaction.guild_id) {
     return interactionResponse(ResponseType.AUTOCOMPLETE, { choices: [] });
@@ -169,6 +177,10 @@ async function respondFast(ctx, interaction, handler, executionCtx, { replyType,
 
   executionCtx.waitUntil(runAfter(ctx, interaction, result.after));
 
+  if (result.file) {
+    return fileResponse(result.file);
+  }
+
   if (!result.payload) {
     return interactionResponse(ResponseType.DEFERRED_UPDATE);
   }
@@ -181,22 +193,39 @@ async function respondFast(ctx, interaction, handler, executionCtx, { replyType,
   return interactionResponse(type, type === ResponseType.UPDATE ? withoutFlag(result.payload, MessageFlags.EPHEMERAL) : result.payload);
 }
 
+// A private reply carrying a file, sent as the interaction response itself (multipart).
+function fileResponse(file) {
+  const form = new FormData();
+  form.append(
+    "payload_json",
+    JSON.stringify({
+      type: ResponseType.MESSAGE,
+      data: { content: file.content, attachments: [{ id: 0, filename: file.filename }], flags: MessageFlags.EPHEMERAL, allowed_mentions: { parse: [] } },
+    })
+  );
+  form.append("files[0]", new Blob([file.data], { type: "text/csv" }), file.filename);
+  return new Response(form);
+}
+
 async function execute(ctx, interaction, handler, args) {
   try {
     await ensureSchema(ctx);
+    await loadGuildContext(ctx, interaction);
     const result = (await handler.run(ctx, interaction, args)) || {};
     return { ...result, isError: false };
   } catch (err) {
     if (!(err instanceof UserError)) {
       console.error(`Interaction ${interaction.data?.name || interaction.data?.custom_id} failed:`, err);
     }
-    return { payload: errorPayload(err), isError: true };
+    return { payload: errorPayload(err, ctx), isError: true };
   }
 }
 
 // Delivers a result that finished after the initial reply.
 async function finish(ctx, interaction, result, { deferType, publicDefer }) {
-  if (result.payload) {
+  if (result.file) {
+    await editOriginalWithFile(ctx, interaction, result.file);
+  } else if (result.payload) {
     if (deferType === ResponseType.DEFERRED_UPDATE) {
       const ephemeral = result.isError || (Number(result.payload.flags) & MessageFlags.EPHEMERAL) !== 0;
       if (ephemeral) await sendFollowup(ctx, interaction, withFlag(result.payload, MessageFlags.EPHEMERAL));
@@ -239,7 +268,11 @@ const PSN_ERRORS = {
   unavailable: ["PlayStation Network didn't answer", "Try again in a few minutes."],
 };
 
-function errorPayload(err) {
+function errorPayload(err, ctx) {
+  if (err instanceof PremiumRequiredError) {
+    return premiumOnlyView({ skuId: ctx?.settings?.premiumSkuId });
+  }
+
   if (err instanceof UserError) {
     return noticeView({ tone: err.tone, title: err.title, body: err.body, suggestions: err.suggestions });
   }

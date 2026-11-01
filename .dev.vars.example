@@ -7,3 +7,16 @@ PSN_NPSSO_BACKUP=
 # Optional: where PSN login reminders go (defaults to the original Outplayed Trash channel).
 OPS_CHANNEL_ID=
 SUPPORT_URL=
+
+# Platinum (premium). All optional.
+# The owner's server, where /admin is registered (defaults to Outplayed Trash).
+OWNER_GUILD_ID=
+# User ids allowed to use /admin without being an administrator there.
+OWNER_USER_IDS=
+# Servers that always have Platinum, for testing (comma-separated).
+PREMIUM_GUILD_IDS=
+# Discord server-subscription SKU that unlocks Platinum. Leave empty to keep payments disconnected.
+PREMIUM_SKU_ID=
+PREMIUM_CACHE_TTL_HOURS=2
+PREMIUM_LINKS_PER_USER=6
+PREMIUM_LINKS_PER_MODERATOR=100

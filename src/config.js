@@ -18,6 +18,8 @@ export const DAY_MS = 24 * HOUR_MS;
 
 // The old hard-coded reminder target (Outplayed Trash). Override with OPS_CHANNEL_ID.
 export const DEFAULT_OPS_CHANNEL_ID = "784782670856978468";
+// The owner's server, where /admin is registered. Override with OWNER_GUILD_ID.
+export const DEFAULT_OWNER_GUILD_ID = "784782670856978464";
 // Fallback NPSSO expiry used before a refresh token has been stored.
 export const NPSSO_EXPIRES_AT_MS = Date.UTC(2026, 7, 10, 0, 0, 0);
 export const NPSSO_LIFETIME_MS = 60 * DAY_MS;
@@ -36,6 +38,24 @@ export const PLATINUMS_MAX_LIMIT = 10;
 export const PLATINUMS_SCAN_TITLES = 200;
 export const ALERT_TITLE_SCAN = 10;
 export const MAX_ALERTS_PER_ACCOUNT = 3;
+// Only platinums earned this recently are announced; older catch-up ones are recorded quietly.
+export const ALERT_MAX_AGE_MS = 48 * HOUR_MS;
+
+export const MAX_MILESTONES = 10;
+export const RACE_MAX_DAYS = 90;
+export const RACE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+export const TITLE_SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
+export const TITLE_SYNC_LIMIT = 20;
+export const HISTORY_DAYS = 56;
+export const ROLE_RECHECK_MS = 7 * DAY_MS;
+export const MAX_ROLE_CHANGES_PER_GUILD = 8;
+// Discord leaves a renewing subscription's `ends_at` empty, so an active one keeps the server
+// on Platinum for a rolling week, extended by the hourly check and by every command.
+export const ENTITLEMENT_GRACE_MS = 7 * DAY_MS;
+export const ENTITLEMENT_SYNC_INTERVAL_MS = HOUR_MS;
+// Server names for /admin are refreshed daily; servers unseen for 3 days are dropped.
+export const DIRECTORY_SYNC_INTERVAL_MS = DAY_MS;
+export const DIRECTORY_KEEP_MS = 3 * DAY_MS;
 
 // Weekly posts go out Sundays 16:00 UTC; late runs may catch up for 48 hours.
 export const WEEKLY_POST_DAY = 0;
@@ -62,8 +82,26 @@ export function getSettings(env = {}) {
     refreshPerRun: intSetting(env.REFRESH_PER_RUN, 25, { min: 1, max: 500 }),
     cacheTtlMs: intSetting(env.CACHE_TTL_HOURS, 6, { min: 1, max: 72 }) * HOUR_MS,
     maxLinksPerUser: intSetting(env.MAX_LINKS_PER_USER, 3, { min: 1, max: 25 }),
+    // Moderators often link accounts for their whole community from one Discord account.
+    maxLinksPerModerator: intSetting(env.MAX_LINKS_PER_MODERATOR, 50, { min: 1, max: 500 }),
     syncReplyTimeoutMs: intSetting(env.SYNC_REPLY_TIMEOUT_MS, SYNC_REPLY_TIMEOUT_MS, { min: 10, max: 2800 }),
     opsChannelId: String(env.OPS_CHANNEL_ID || DEFAULT_OPS_CHANNEL_ID),
     supportUrl: env.SUPPORT_URL,
+
+    // Platinum (premium). Not tied to payments until PREMIUM_SKU_ID is set.
+    premiumCacheTtlMs: intSetting(env.PREMIUM_CACHE_TTL_HOURS, 2, { min: 1, max: 24 }) * HOUR_MS,
+    premiumLinksPerUser: intSetting(env.PREMIUM_LINKS_PER_USER, 6, { min: 1, max: 50 }),
+    premiumLinksPerModerator: intSetting(env.PREMIUM_LINKS_PER_MODERATOR, 100, { min: 1, max: 1000 }),
+    premiumGuildIds: listSetting(env.PREMIUM_GUILD_IDS),
+    premiumSkuId: String(env.PREMIUM_SKU_ID || ""),
+    ownerGuildId: String(env.OWNER_GUILD_ID || DEFAULT_OWNER_GUILD_ID),
+    ownerUserIds: listSetting(env.OWNER_USER_IDS),
   };
+}
+
+function listSetting(value) {
+  return String(value || "")
+    .split(/[\s,]+/)
+    .map((item) => item.trim())
+    .filter((item) => /^\d{5,25}$/.test(item));
 }

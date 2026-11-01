@@ -24,10 +24,13 @@ export const MessageFlags = {
 
 export const OptionType = {
   SUB_COMMAND: 1,
+  SUB_COMMAND_GROUP: 2,
   STRING: 3,
   INTEGER: 4,
+  BOOLEAN: 5,
   USER: 6,
   CHANNEL: 7,
+  ROLE: 8,
 };
 
 const ADMINISTRATOR = 1n << 3n;
@@ -85,8 +88,13 @@ export function getUserId(interaction) {
   return interaction.member?.user?.id || interaction.user?.id || null;
 }
 
+export function getSubcommandGroup(interaction) {
+  return interaction.data?.options?.find((option) => option.type === OptionType.SUB_COMMAND_GROUP) || null;
+}
+
 export function getSubcommand(interaction) {
-  return interaction.data?.options?.find((option) => option.type === OptionType.SUB_COMMAND) || null;
+  const list = getSubcommandGroup(interaction)?.options || interaction.data?.options;
+  return list?.find((option) => option.type === OptionType.SUB_COMMAND) || null;
 }
 
 function getOptions(interaction) {
@@ -193,6 +201,80 @@ export async function replaceWithEphemeral(ctx, interaction, payload) {
   }
 
   return sendFollowup(ctx, interaction, { ...payload, flags: Number(payload.flags || 0) | MessageFlags.EPHEMERAL });
+}
+
+// ---------------------------------------------------------------------------------------
+// Bot-token REST calls (the token never leaves Cloudflare).
+
+async function botRequest(ctx, method, path, body) {
+  if (!ctx.env.DISCORD_BOT_TOKEN) return { ok: false, status: 0, error: "missing_bot_token" };
+  const res = await ctx.fetch(`${DISCORD_API_BASE_URL}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bot ${ctx.env.DISCORD_BOT_TOKEN}`,
+      "Content-Type": "application/json",
+      "X-Audit-Log-Reason": "PSN Trophy Bot",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text().catch(() => "");
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (res.ok) return { ok: true, status: res.status, data };
+  return { ok: false, status: res.status, error: classifyChannelError(res.status, text), detail: text.slice(0, 300) };
+}
+
+export function getApplication(ctx) {
+  return botRequest(ctx, "GET", "/applications/@me");
+}
+
+export function putCommands(ctx, applicationId, commands, guildId = null) {
+  const path = guildId ? `/applications/${applicationId}/guilds/${guildId}/commands` : `/applications/${applicationId}/commands`;
+  return botRequest(ctx, "PUT", path, commands);
+}
+
+export function getGuild(ctx, guildId) {
+  return botRequest(ctx, "GET", `/guilds/${guildId}`);
+}
+
+// Servers the bot is in, 200 per page (pass the last id as `after`), with member counts.
+export function listBotGuilds(ctx, after = null) {
+  const query = new URLSearchParams({ limit: "200", with_counts: "true" });
+  if (after) query.set("after", after);
+  return botRequest(ctx, "GET", `/users/@me/guilds?${query}`);
+}
+
+// Active purchases of one SKU, oldest first, 100 per page (pass the last id as `after`).
+export function listEntitlements(ctx, applicationId, skuId, after = null) {
+  const query = new URLSearchParams({ sku_ids: skuId, exclude_ended: "true", exclude_deleted: "true", limit: "100" });
+  if (after) query.set("after", after);
+  return botRequest(ctx, "GET", `/applications/${applicationId}/entitlements?${query}`);
+}
+
+export function setMemberRole(ctx, { guildId, userId, roleId, add }) {
+  return botRequest(ctx, add ? "PUT" : "DELETE", `/guilds/${guildId}/members/${userId}/roles/${roleId}`);
+}
+
+// Replaces the "thinking…" reply with a message that carries a file (e.g. a CSV export).
+export async function editOriginalWithFile(ctx, interaction, { content, filename, data, type = "text/csv" }) {
+  const form = new FormData();
+  form.append(
+    "payload_json",
+    JSON.stringify({ content, attachments: [{ id: 0, filename }], allowed_mentions: { parse: [] }, components: [] })
+  );
+  form.append("files[0]", new Blob([data], { type }), filename);
+  try {
+    const res = await ctx.fetch(`${webhookUrl(interaction)}/messages/@original`, { method: "PATCH", body: form }, { reserved: true });
+    await res.text().catch(() => "");
+    return res.ok;
+  } catch (err) {
+    console.error(`Discord file upload failed: ${err.message}`);
+    return false;
+  }
 }
 
 function classifyChannelError(status, detail) {

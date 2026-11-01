@@ -48,6 +48,14 @@ export class UserError extends Error {
   }
 }
 
+// A Platinum command used in a server without Platinum (shown with a buy button when possible).
+export class PremiumRequiredError extends UserError {
+  constructor() {
+    super("This is a Platinum feature", "Platinum isn't active in this server.", { tone: "info" });
+    this.name = "PremiumRequiredError";
+  }
+}
+
 function countingDb(db, budget) {
   const wrap = (stmt) => ({
     statement: stmt,
@@ -141,14 +149,19 @@ export function clampInteger(value, min, max, fallback = min) {
   return Math.min(max, Math.max(min, parsed));
 }
 
-// Most recent Sunday 16:00 UTC at or before `now`.
-export function weeklyPostSlot(now) {
+// Most recent `day` (0 = Sunday) at `hour`:00 UTC at or before `now`.
+export function weeklySlot(now, day, hour) {
   const date = new Date(now);
-  const slot = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), WEEKLY_POST_HOUR_UTC);
-  const daysBack = (date.getUTCDay() - WEEKLY_POST_DAY + 7) % 7;
+  const slot = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), hour);
+  const daysBack = (date.getUTCDay() - day + 7) % 7;
   let start = slot - daysBack * DAY_MS;
   if (start > now) start -= 7 * DAY_MS;
   return start;
+}
+
+// Most recent Sunday 16:00 UTC at or before `now`.
+export function weeklyPostSlot(now) {
+  return weeklySlot(now, WEEKLY_POST_DAY, WEEKLY_POST_HOUR_UTC);
 }
 
 export function nextWeeklyPostSlot(now) {

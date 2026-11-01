@@ -1,6 +1,8 @@
 name = "psn-trophy-bot"
 main = "src/worker.js"
 compatibility_date = "2026-06-11"
+# Keep variables set in the dashboard (e.g. SUPPORT_URL, OPS_CHANNEL_ID) when deploying.
+keep_vars = true
 
 [vars]
 DISCORD_PUBLIC_KEY = "16e9e7469914be61ec1a28a0afe45344730efec37ee7d53c8b4a4da6d59f5e6d"

@@ -9,6 +9,15 @@ function validateButton(button, errors, customIds) {
     errors.push(`action row child must be a button, got ${button.type}`);
     return;
   }
+  // Premium (buy) buttons: Discord draws the label and price from the SKU.
+  if (button.style === 6) {
+    if (!/^\w+$/.test(button.sku_id || "")) errors.push("premium button needs a sku_id");
+    for (const field of ["custom_id", "label", "emoji", "url"]) {
+      if (button[field] !== undefined) errors.push(`premium button cannot have ${field}`);
+    }
+    return;
+  }
+  if (button.sku_id !== undefined) errors.push("only premium buttons can have a sku_id");
   if (!button.label && !button.emoji) errors.push("button needs a label or emoji");
   if (button.label && button.label.length > 80) errors.push("button label over 80 characters");
   if (button.style === 5) {
