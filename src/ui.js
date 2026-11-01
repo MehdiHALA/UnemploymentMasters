@@ -82,6 +82,9 @@ export function button({ customId, label, emoji, style = 2, disabled = false, ur
   };
 }
 
+// Discord's own "buy" button for a SKU; Discord fills in the name and price.
+export const premiumButton = (skuId) => ({ type: 2, style: 6, sku_id: String(skuId) });
+
 export function message(components, { ephemeral = false } = {}) {
   return {
     flags: COMPONENTS_V2 | (ephemeral ? EPHEMERAL : 0),
@@ -547,7 +550,8 @@ export function platinumAlertMessage({ owner, avatarUrl, titles, platinumCount, 
 // ---------------------------------------------------------------------------------------
 // Support, admin and ops.
 
-export function supportView({ supportUrl }) {
+// `skuId` (PREMIUM_SKU_ID) adds Platinum and Discord's buy button once payments are connected.
+export function supportView({ supportUrl, skuId = "" }) {
   const children = [
     text(
       [
@@ -561,6 +565,19 @@ export function supportView({ supportUrl }) {
 
   if (supportUrl) {
     children.push(actionRow([button({ url: supportUrl, label: "Support the bot", emoji: "💙" })]));
+  }
+
+  if (skuId) {
+    children.push(
+      separator(),
+      text(
+        [
+          "### 💠 Platinum for your server",
+          "Refresh every 2 hours, monthly standings with a Hunter of the Month, platinum races, per-game boards, milestone roles and more. One subscription covers the whole server.",
+        ].join("\n")
+      ),
+      actionRow([premiumButton(skuId)])
+    );
   }
 
   return message([container(children, COLORS.psn)]);

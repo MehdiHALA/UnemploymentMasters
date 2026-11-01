@@ -17,7 +17,10 @@ export function isPremiumSql(guildColumn, nowParam) {
 
 export async function getActivePremiumGuilds(ctx, now) {
   const { results = [] } = await ctx.db
-    .prepare("SELECT guild_id, source, note, granted_at, expires_at FROM premium_guilds WHERE expires_at IS NULL OR expires_at > ?1 ORDER BY granted_at")
+    .prepare(
+      `SELECT guild_id, source, note, granted_at, expires_at, welcome_status FROM premium_guilds
+       WHERE expires_at IS NULL OR expires_at > ?1 ORDER BY granted_at`
+    )
     .bind(now)
     .all();
   return results;
@@ -39,14 +42,77 @@ export async function getGuildBranding(ctx, guildId, now) {
     .first();
 }
 
-export function grantPremiumStatement(ctx, { guildId, source, note, now, expiresAt }) {
+// `announce` queues a one-time welcome post in the server's bot channel (see welcomeStage).
+export function grantPremiumStatement(ctx, { guildId, source, note, now, expiresAt, announce = false }) {
   return ctx.db
     .prepare(
-      `INSERT INTO premium_guilds (guild_id, source, note, granted_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)
+      `INSERT INTO premium_guilds (guild_id, source, note, granted_at, expires_at, welcome_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
        ON CONFLICT(guild_id) DO UPDATE SET source = excluded.source, note = COALESCE(excluded.note, premium_guilds.note),
-         expires_at = excluded.expires_at`
+         expires_at = excluded.expires_at, welcome_status = COALESCE(excluded.welcome_status, premium_guilds.welcome_status)`
     )
-    .bind(guildId, source, note ?? null, now, expiresAt ?? null);
+    .bind(guildId, source, note ?? null, now, expiresAt ?? null, announce ? "pending" : null);
+}
+
+// Servers with a welcome post waiting, plus where and how to post it.
+export async function getPendingWelcomes(ctx, now, limit) {
+  const { results = [] } = await ctx.db
+    .prepare(
+      `SELECT p.guild_id, p.expires_at, g.leaderboard_channel_id, g.channel_error, g.accent_color, g.emoji_json
+       FROM premium_guilds p LEFT JOIN guild_settings g ON g.guild_id = p.guild_id
+       WHERE p.welcome_status = 'pending' AND (p.expires_at IS NULL OR p.expires_at > ?1)
+       LIMIT ?2`
+    )
+    .bind(now, limit)
+    .all();
+  return results;
+}
+
+export function welcomeStatusStatement(ctx, guildId, status) {
+  return ctx.db.prepare("UPDATE premium_guilds SET welcome_status = ?2 WHERE guild_id = ?1").bind(guildId, status);
+}
+
+// ---------------------------------------------------------------------------------------
+// Server directory (names of the servers the bot is in), for /admin.
+
+export function directoryStatement(ctx, { guildId, name, members, now }) {
+  return ctx.db
+    .prepare(
+      `INSERT INTO guild_directory (guild_id, name, member_count, seen_at) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(guild_id) DO UPDATE SET name = excluded.name, member_count = excluded.member_count, seen_at = excluded.seen_at`
+    )
+    .bind(guildId, name, members ?? null, now);
+}
+
+// Servers not seen for a while: the bot was removed from them.
+export function pruneDirectoryStatement(ctx, seenBefore) {
+  return ctx.db.prepare("DELETE FROM guild_directory WHERE seen_at < ?1").bind(seenBefore);
+}
+
+export async function getDirectoryNames(ctx, guildIds) {
+  const ids = [...new Set(guildIds)].slice(0, 90);
+  if (ids.length === 0) return new Map();
+  const { results = [] } = await ctx.db
+    .prepare(`SELECT guild_id, name FROM guild_directory WHERE guild_id IN (${ids.map((_, i) => `?${i + 1}`).join(", ")})`)
+    .bind(...ids)
+    .all();
+  return new Map(results.map((row) => [row.guild_id, row.name]));
+}
+
+// Servers whose name contains `query`, biggest first, with how many members linked accounts.
+export async function findDirectory(ctx, query, limit) {
+  const { results = [] } = await ctx.db
+    .prepare(
+      `SELECT d.guild_id, d.name, d.member_count,
+              (SELECT COUNT(*) FROM psn_users u WHERE u.guild_id = d.guild_id) AS links,
+              ${isPremiumSql("d.guild_id", "?2")} AS premium
+       FROM guild_directory d
+       WHERE d.name LIKE ?1
+       ORDER BY COALESCE(d.member_count, 0) DESC
+       LIMIT ?3`
+    )
+    .bind(`%${String(query).replace(/[%_]/g, "")}%`, Date.now(), limit)
+    .all();
+  return results;
 }
 
 // A paid subscription: only ever extends Platinum (a grant with no end date is left alone).

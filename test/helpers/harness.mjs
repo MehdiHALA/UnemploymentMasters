@@ -347,6 +347,9 @@ export function createDiscord() {
     goneMembers: new Set(),
     entitlements: [],
     entitlementCalls: 0,
+    // Servers the bot is in, for GET /users/@me/guilds: { id, name, approximate_member_count }.
+    botGuilds: [],
+    guildListCalls: 0,
 
     async handle(url, method, init) {
       const parts = url.pathname.split("/").filter(Boolean);
@@ -376,6 +379,14 @@ export function createDiscord() {
         if (guildId) discord.guildCommands.set(guildId, body);
         else discord.globalCommands = body;
         return json(body.map((c, i) => ({ id: String(i), ...c })));
+      }
+
+      if (parts[2] === "users" && parts[4] === "guilds") {
+        discord.guildListCalls += 1;
+        const after = BigInt(url.searchParams.get("after") || 0);
+        const limit = Number(url.searchParams.get("limit") || 200);
+        const sorted = [...discord.botGuilds].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+        return json(sorted.filter((g) => BigInt(g.id) > after).slice(0, limit));
       }
 
       if (parts[2] === "guilds" && parts[4] === "members") {

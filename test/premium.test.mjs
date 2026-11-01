@@ -676,3 +676,137 @@ test("members who left are skipped for a week, then picked up again if they rejo
   assert.equal(bot.db.row("SELECT COUNT(*) AS n FROM role_grants WHERE role_id = '-'").n, 0, "back in the server");
   assert.equal(bot.db.row("SELECT COUNT(*) AS n FROM role_grants WHERE discord_id = ? AND role_id = '777000000000000010'", discordId(2)).n, 1);
 });
+
+test("the daily server list lets the owner find a server's ID by name", async () => {
+  const bot = await createBot({ env: { OWNER_GUILD_ID: OWNER_GUILD } });
+  bot.seedAuth();
+  bot.seedAccounts(3, { guildId: "100000000000000078", cache: "fresh" });
+  bot.discord.botGuilds = [
+    ...Array.from({ length: 250 }, (_, i) => ({ id: String(200000000000000000n + BigInt(i)), name: `Filler ${i}`, approximate_member_count: i })),
+    { id: "100000000000000078", name: "Sector 78", approximate_member_count: 812 },
+    { id: OWNER_GUILD, name: "Outplayed Trash", approximate_member_count: 40 },
+  ];
+
+  await bot.cron();
+  assert.equal(bot.discord.guildListCalls, 2, "two pages of 200");
+  assert.equal(bot.db.row("SELECT COUNT(*) AS n FROM guild_directory").n, 252);
+  await bot.cron();
+  assert.equal(bot.discord.guildListCalls, 2, "refreshed once a day");
+
+  const found = await bot.command("admin", sub("find", [option("name", "sector")]), owner);
+  const text = allText(found.final);
+  assert.match(text, /Sector 78/);
+  assert.match(text, /100000000000000078/);
+  assert.match(text, /812 members · 3 links/);
+
+  bot.grantPremium("100000000000000078");
+  const lookups = bot.discord.guildListCalls;
+  const list = await bot.command("admin", sub("list"), owner);
+  assert.match(allText(list.final), /Sector 78/);
+  assert.equal(list.meter.fetches, 0, "names come from the stored list, no Discord calls");
+  assert.equal(bot.discord.guildListCalls, lookups);
+
+  bot.discord.botGuilds = bot.discord.botGuilds.filter((g) => g.name !== "Sector 78");
+  await bot.cron(Date.now() + 4 * DAY + HOUR);
+  assert.equal(bot.db.row("SELECT COUNT(*) AS n FROM guild_directory WHERE guild_id = '100000000000000078'").n, 0, "servers the bot left drop out");
+});
+
+test("a grant with announce posts one welcome message in the server's bot channel", async () => {
+  const bot = await createBot({ env: { OWNER_GUILD_ID: OWNER_GUILD } });
+  bot.seedAuth();
+  bot.seedAccounts(3, { guildId: PREMIUM_GUILD, cache: "fresh" });
+  bot.setWeeklyChannel(PREMIUM_GUILD, "bot-channel", Date.now());
+
+  const grant = await bot.command(
+    "admin",
+    sub("grant", [option("server_id", PREMIUM_GUILD), option("days", 181, 4), option("note", "6 months free"), option("announce", true, 5)]),
+    owner
+  );
+  assert.match(allText(grant.final), /welcome post goes to their bot channel/);
+  assert.equal(bot.db.row("SELECT welcome_status FROM premium_guilds WHERE guild_id = ?", PREMIUM_GUILD).welcome_status, "pending");
+
+  const run = await bot.cron();
+  assert.ok(run.meter.total <= BUDGET);
+  const welcome = bot.discord.posts.filter((p) => p.channelId === "bot-channel" && /now has Platinum/.test(allText(p.body)));
+  assert.equal(welcome.length, 1);
+  assert.match(allText(welcome[0].body), /free until <t:\d+:D>/);
+  assert.equal(bot.db.row("SELECT welcome_status FROM premium_guilds WHERE guild_id = ?", PREMIUM_GUILD).welcome_status, "posted:bot-channel");
+
+  await bot.cron();
+  assert.equal(bot.discord.posts.filter((p) => /now has Platinum/.test(allText(p.body))).length, 1, "only once");
+  const list = await bot.command("admin", sub("list"), owner);
+  assert.match(allText(list.final), /welcomed in <#bot-channel>/);
+});
+
+test("a welcome queued straight in the database waits for the commands, then posts", async () => {
+  const bot = await createBot();
+  bot.seedAuth();
+  bot.seedAccounts(2, { guildId: PREMIUM_GUILD, cache: "fresh" });
+  bot.setWeeklyChannel(PREMIUM_GUILD, "bot-channel", Date.now());
+  bot.db.sqlite
+    .prepare("INSERT INTO premium_guilds (guild_id, source, note, granted_at, expires_at, welcome_status) VALUES (?, 'grant', 'gift', ?, ?, 'pending')")
+    .run(PREMIUM_GUILD, Date.now(), Date.now() + 181 * DAY);
+
+  await bot.cron();
+  assert.deepEqual(bot.discord.guildCommands.get(PREMIUM_GUILD).map((c) => c.name), PREMIUM_COMMANDS.map((c) => c.name));
+  assert.equal(bot.discord.posts.filter((p) => p.channelId === "bot-channel" && /now has Platinum/.test(allText(p.body))).length, 1, "same run");
+
+  const quiet = await createBot();
+  quiet.seedAuth();
+  quiet.db.sqlite
+    .prepare("INSERT INTO premium_guilds (guild_id, source, granted_at, expires_at, welcome_status) VALUES (?, 'grant', ?, NULL, 'pending')")
+    .run(PREMIUM_GUILD, Date.now());
+  await quiet.cron();
+  assert.equal(quiet.discord.posts.length, 0);
+  assert.equal(quiet.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "no_channel", "no bot channel set up there");
+});
+
+test("once payments are connected, /support and Platinum-only replies offer Discord's buy button", async () => {
+  const sku = "1300000000000000001";
+  const bot = await createBot({ env: { PREMIUM_SKU_ID: sku } });
+  bot.seedAuth();
+  bot.seedAccounts(2, { cache: "fresh" });
+  const premiumButtons = (payload) => findButtons(payload).filter((b) => b.style === 6);
+
+  const support = await bot.command("support");
+  assert.deepEqual(support.replyErrors, []);
+  assert.deepEqual(premiumButtons(support.final).map((b) => b.sku_id), [sku]);
+  assert.match(allText(support.final), /Platinum for your server/);
+
+  const locked = await bot.command("monthly");
+  assert.deepEqual(premiumButtons(locked.final).map((b) => b.sku_id), [sku]);
+  assert.deepEqual(validateMessage(locked.final), []);
+
+  bot.grantPremium("g1");
+  bot.clearCaches();
+  const subscribed = await bot.command("support");
+  assert.equal(premiumButtons(subscribed.final).length, 0, "no buy button where Platinum is active");
+
+  const unlinked = await createBot();
+  unlinked.seedAuth();
+  const plain = await unlinked.command("support");
+  assert.equal(premiumButtons(plain.final).length, 0, "nothing to buy while payments are disconnected");
+  assert.doesNotMatch(allText(plain.final), /Platinum/);
+});
+
+test("daily cleanup keeps Platinum history for 90 days and drops old races", async () => {
+  const bot = await createBot();
+  bot.seedAuth();
+  const [account] = bot.seedAccounts(1, { cache: "fresh" });
+  const day = (daysAgo) => new Date(Date.now() - daysAgo * DAY).toISOString().slice(0, 10);
+  const history = bot.db.sqlite.prepare("INSERT INTO trophy_history (psn_id, day, platinum, total) VALUES (?, ?, 1, 1)");
+  history.run(account.psnId, day(120));
+  history.run(account.psnId, day(10));
+  history.run("unlinked-account", day(5));
+  const race = bot.db.sqlite.prepare(
+    "INSERT INTO races (id, guild_id, np_communication_id, title_name, created_by, started_at, ends_at, status) VALUES (?, 'g1', 'NPWR1', 'x', '1', 0, ?, ?)"
+  );
+  race.run("old", Date.now() - 100 * DAY, "ended");
+  race.run("recent", Date.now() - 10 * DAY, "ended");
+  bot.db.sqlite.prepare("INSERT INTO race_participants (race_id, psn_id, discord_id, name, joined_at) VALUES ('old', 'p', '1', 'x', 0), ('recent', 'p', '1', 'x', 0)").run();
+
+  await bot.cron();
+  assert.deepEqual(bot.db.rows("SELECT day FROM trophy_history").map((r) => r.day), [day(10)]);
+  assert.deepEqual(bot.db.rows("SELECT id FROM races").map((r) => r.id), ["recent"]);
+  assert.deepEqual(bot.db.rows("SELECT race_id FROM race_participants").map((r) => r.race_id), ["recent"]);
+});

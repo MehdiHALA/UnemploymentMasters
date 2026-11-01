@@ -60,7 +60,11 @@ export async function runScheduled(env, event = {}) {
     await stage(report, "weekly", () => postDueWeekly(ctx, now, report));
     if (hasPremium) await stage(report, "premium-weekly", () => premiumJobs.customWeeklyStage(ctx, now, report));
     await stage(report, "alerts", () => processAlerts(ctx, now, report));
-    if (hasPremium) await stage(report, "races", () => premiumJobs.racesStage(ctx, now, report));
+    if (hasPremium) {
+      await stage(report, "welcome", () => premiumJobs.welcomeStage(ctx, now, premium));
+      await stage(report, "races", () => premiumJobs.racesStage(ctx, now, report));
+    }
+    await stage(report, "directory", () => premiumJobs.directoryStage(ctx, now, premium, updates));
     await stage(report, "refresh", () => refreshDue(ctx, now, report, state, updates));
     if (hasPremium) {
       await stage(report, "monthly", () => premiumJobs.monthlyStage(ctx, now, report));

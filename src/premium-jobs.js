@@ -2,6 +2,8 @@
 // and costs nothing when no server has Platinum.
 
 import {
+  DIRECTORY_KEEP_MS,
+  DIRECTORY_SYNC_INTERVAL_MS,
   ENTITLEMENT_SYNC_INTERVAL_MS,
   LEADERBOARD_PAGE_SIZE,
   MAX_ROLE_CHANGES_PER_GUILD,
@@ -13,7 +15,7 @@ import {
 } from "./config.js";
 import * as db from "./db.js";
 import * as pdb from "./db-premium.js";
-import { listEntitlements, postChannelMessage, setMemberRole } from "./discord.js";
+import { listBotGuilds, listEntitlements, postChannelMessage, setMemberRole } from "./discord.js";
 import { brandingTheme, entitlementUntil, isActiveServerEntitlement, monthKey } from "./premium.js";
 import { syncCommands } from "./premium-commands.js";
 import * as pui from "./premium-ui.js";
@@ -28,7 +30,8 @@ export async function loadPremiumState(ctx, now) {
       .prepare("SELECT guild_id FROM premium_guilds WHERE expires_at IS NULL OR expires_at > ?1")
       .bind(now),
     ctx.db.prepare(
-      "SELECT key, value FROM job_state WHERE key IN ('application_id', 'entitlements_synced_at') OR key LIKE 'commands_hash:%'"
+      `SELECT key, value FROM job_state
+       WHERE key IN ('application_id', 'entitlements_synced_at', 'directory_synced_at') OR key LIKE 'commands_hash:%'`
     ),
   ]);
 
@@ -89,6 +92,65 @@ function themeFor(ctx, row) {
 
 // Channel errors that won't fix themselves by retrying (rate limits and outages will).
 const LASTING_POST_ERRORS = ["missing_access", "unknown_channel", "bad_request", "missing_bot_token"];
+
+// ---------------------------------------------------------------------------------------
+// Owner tools: once a day, store the names of the servers the bot is in (for /admin).
+
+export async function directoryStage(ctx, now, premium, updates) {
+  if (!ctx.env.DISCORD_BOT_TOKEN || ctx.budget.remaining() < 8) return;
+  if (now - Number(premium.commandState.get("directory_synced_at") || 0) < DIRECTORY_SYNC_INTERVAL_MS) return;
+
+  const guilds = [];
+  let after = null;
+  for (let page = 0; page < 5 && ctx.budget.remaining() > 4; page += 1) {
+    const result = await listBotGuilds(ctx, after);
+    if (!result.ok) {
+      console.warn(`Server list failed: ${result.status} ${result.detail || ""}`);
+      return;
+    }
+    const list = Array.isArray(result.data) ? result.data : [];
+    guilds.push(...list);
+    if (list.length < 200) break;
+    after = list.at(-1).id;
+  }
+
+  const statements = guilds.map((guild) =>
+    pdb.directoryStatement(ctx, { guildId: String(guild.id), name: String(guild.name || ""), members: guild.approximate_member_count, now })
+  );
+  statements.push(pdb.pruneDirectoryStatement(ctx, now - DIRECTORY_KEEP_MS));
+  await ctx.db.batch(statements, { reserved: true });
+  updates.set("directory_synced_at", String(now));
+}
+
+// ---------------------------------------------------------------------------------------
+// One-time welcome post for servers granted Platinum with `announce`, sent once their
+// Platinum commands are registered (so everything the post mentions is there).
+
+export async function welcomeStage(ctx, now, premium) {
+  if (!ctx.env.DISCORD_BOT_TOKEN || ctx.budget.remaining() < 4) return;
+  const pending = await pdb.getPendingWelcomes(ctx, now, 2);
+
+  for (const row of pending) {
+    if (ctx.budget.remaining() < 2) break;
+    const registered = /^[0-9a-f]{16}$/.test(premium.commandState.get(`commands_hash:guild:${row.guild_id}`) || "");
+    if (!registered) continue;
+
+    if (!row.leaderboard_channel_id || row.channel_error) {
+      await pdb.welcomeStatusStatement(ctx, row.guild_id, "no_channel").run();
+      continue;
+    }
+    const result = await postChannelMessage(
+      ctx,
+      row.leaderboard_channel_id,
+      pui.welcomeMessage({ expiresAt: Number(row.expires_at || 0) || null, theme: themeFor(ctx, row) })
+    );
+    if (result.ok) {
+      await pdb.welcomeStatusStatement(ctx, row.guild_id, `posted:${row.leaderboard_channel_id}`).run();
+    } else if (LASTING_POST_ERRORS.includes(result.error)) {
+      await pdb.welcomeStatusStatement(ctx, row.guild_id, `failed:${result.error}`).run();
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------------------
 // Weekly posts on a custom day and hour.

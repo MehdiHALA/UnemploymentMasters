@@ -35,9 +35,9 @@ Platinum is switched on per server, never per member. Its commands only appear i
 | `/platinum export` | The leaderboard as a CSV file |
 | More links | 6 accounts per member (100 for moderators) instead of 3 (50) |
 
-**Turning it on.** The owner uses `/admin grant server_id [days] [note]` in the owner's server (`OWNER_GUILD_ID`), where `/admin` is the only extra command. `/admin revoke`, `/admin list` and `/admin stats` (servers, links, Platinum, PSN health) sit alongside it. For testing, `PREMIUM_GUILD_IDS` lists servers that always have Platinum.
+**Turning it on.** The owner uses `/admin grant server_id [days] [note] [announce]` in the owner's server (`OWNER_GUILD_ID`), where `/admin` is the only extra command. With `announce`, the bot posts one welcome message in that server's bot channel once the Platinum commands are live there. `/admin find name` looks up a server's ID by name (from a server list the bot refreshes daily), and `/admin revoke`, `/admin list` and `/admin stats` (servers, links, Platinum, PSN health) sit alongside it. For testing, `PREMIUM_GUILD_IDS` lists servers that always have Platinum.
 
-**Payments are not connected.** Nothing is sold until `PREMIUM_SKU_ID` is set. Once a server subscription SKU exists in the Discord developer portal and its id is in `PREMIUM_SKU_ID`, a server that buys it gets Platinum on its next command (or within the hour, from a background check of Discord's active subscriptions) for as long as the subscription runs. Personal (user) purchases are ignored, and a manual grant is never shortened by a subscription.
+**Payments are not connected.** Nothing is sold until `PREMIUM_SKU_ID` is set. Once a server subscription SKU exists in the Discord developer portal and its id is in `PREMIUM_SKU_ID`, a server that buys it gets Platinum on its next command (or within the hour, from a background check of Discord's active subscriptions) for as long as the subscription runs. Personal (user) purchases are ignored, and a manual grant is never shortened by a subscription. `/support` and replies to Platinum-only commands then show Discord's own buy button (with the price) in servers without Platinum. Discord bills subscriptions monthly.
 
 **Commands register themselves.** The background job keeps the global commands in sync and adds or removes the Platinum commands in each server as Platinum is granted or ends. It only calls Discord when something changed. All Platinum background work is skipped while no server has Platinum, and it shares the same 45-subrequest budget as everything else.
 
@@ -77,7 +77,7 @@ npm install
    Optional: `PSN_NPSSO_BACKUP` (second bot account), `SUPPORT_URL`, `OPS_CHANNEL_ID`.
 3. **Deploy.** `npm run cf:deploy`
 4. **Commands.** The first background run (within 5 minutes) registers them with the bot token. To do it by hand instead: `DISCORD_BOT_TOKEN=... DISCORD_APPLICATION_ID=... npm run cf:register` (add `DISCORD_GUILD_ID=...` to test in one server instantly).
-5. **Discord developer portal.** Set *Interactions Endpoint URL* to your Worker URL. Invite the bot with the `bot` and `applications.commands` scopes so it can post weekly standings. Platinum milestone and Hunter roles also need **Manage Roles**, with the bot's role above those roles.
+5. **Discord developer portal.** Set *Interactions Endpoint URL* to your Worker URL, and *Terms of Service URL* / *Privacy Policy URL* to the Worker URL plus `/terms` and `/privacy` (the Worker serves both pages; `terms.html` and `privacy.html` are copies). Invite the bot with the `bot` and `applications.commands` scopes so it can post weekly standings. Platinum milestone and Hunter roles also need **Manage Roles**, with the bot's role above those roles.
 
 ## 🔧 Configuration
 

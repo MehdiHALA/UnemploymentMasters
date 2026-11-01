@@ -53,6 +53,9 @@ export const MAX_ROLE_CHANGES_PER_GUILD = 8;
 // on Platinum for a rolling week, extended by the hourly check and by every command.
 export const ENTITLEMENT_GRACE_MS = 7 * DAY_MS;
 export const ENTITLEMENT_SYNC_INTERVAL_MS = HOUR_MS;
+// Server names for /admin are refreshed daily; servers unseen for 3 days are dropped.
+export const DIRECTORY_SYNC_INTERVAL_MS = DAY_MS;
+export const DIRECTORY_KEEP_MS = 3 * DAY_MS;
 
 // Weekly posts go out Sundays 16:00 UTC; late runs may catch up for 48 hours.
 export const WEEKLY_POST_DAY = 0;

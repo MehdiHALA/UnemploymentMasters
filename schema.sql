@@ -133,7 +133,15 @@ CREATE TABLE IF NOT EXISTS premium_guilds (
   source TEXT NOT NULL,
   note TEXT,
   granted_at INTEGER NOT NULL,
-  expires_at INTEGER
+  expires_at INTEGER,
+  welcome_status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS guild_directory (
+  guild_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  member_count INTEGER,
+  seen_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS milestone_roles (

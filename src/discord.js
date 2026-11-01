@@ -27,6 +27,7 @@ export const OptionType = {
   SUB_COMMAND_GROUP: 2,
   STRING: 3,
   INTEGER: 4,
+  BOOLEAN: 5,
   USER: 6,
   CHANNEL: 7,
   ROLE: 8,
@@ -238,6 +239,13 @@ export function putCommands(ctx, applicationId, commands, guildId = null) {
 
 export function getGuild(ctx, guildId) {
   return botRequest(ctx, "GET", `/guilds/${guildId}`);
+}
+
+// Servers the bot is in, 200 per page (pass the last id as `after`), with member counts.
+export function listBotGuilds(ctx, after = null) {
+  const query = new URLSearchParams({ limit: "200", with_counts: "true" });
+  if (after) query.set("after", after);
+  return botRequest(ctx, "GET", `/users/@me/guilds?${query}`);
 }
 
 // Active purchases of one SKU, oldest first, 100 per page (pass the last id as `after`).

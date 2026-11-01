@@ -48,6 +48,14 @@ export class UserError extends Error {
   }
 }
 
+// A Platinum command used in a server without Platinum (shown with a buy button when possible).
+export class PremiumRequiredError extends UserError {
+  constructor() {
+    super("This is a Platinum feature", "Platinum isn't active in this server.", { tone: "info" });
+    this.name = "PremiumRequiredError";
+  }
+}
+
 function countingDb(db, budget) {
   const wrap = (stmt) => ({
     statement: stmt,

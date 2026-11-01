@@ -17,7 +17,9 @@ import {
 } from "./discord.js";
 import { runScheduled } from "./jobs.js";
 import { PsnError } from "./psn.js";
-import { BudgetExceededError, createContext, logEvent, sleep, UserError } from "./runtime.js";
+import { BudgetExceededError, createContext, logEvent, PremiumRequiredError, sleep, UserError } from "./runtime.js";
+import { PAGES } from "./pages.js";
+import { premiumOnlyView } from "./premium-ui.js";
 import { createTheme, noticeView, supportView } from "./ui.js";
 
 export { commands } from "./commands.js";
@@ -32,6 +34,9 @@ const TIMED_OUT = Symbol("timed-out");
 export default {
   async fetch(request, env, executionCtx) {
     if (request.method === "GET") {
+      // Public Terms of Service and Privacy Policy pages, for the Discord developer portal.
+      const page = PAGES[new URL(request.url).pathname];
+      if (page) return new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8" } });
       return jsonResponse({ ok: true, service: "psn-trophy-bot" });
     }
 
@@ -212,7 +217,7 @@ async function execute(ctx, interaction, handler, args) {
     if (!(err instanceof UserError)) {
       console.error(`Interaction ${interaction.data?.name || interaction.data?.custom_id} failed:`, err);
     }
-    return { payload: errorPayload(err), isError: true };
+    return { payload: errorPayload(err, ctx), isError: true };
   }
 }
 
@@ -263,7 +268,11 @@ const PSN_ERRORS = {
   unavailable: ["PlayStation Network didn't answer", "Try again in a few minutes."],
 };
 
-function errorPayload(err) {
+function errorPayload(err, ctx) {
+  if (err instanceof PremiumRequiredError) {
+    return premiumOnlyView({ skuId: ctx?.settings?.premiumSkuId });
+  }
+
   if (err instanceof UserError) {
     return noticeView({ tone: err.tone, title: err.title, body: err.body, suggestions: err.suggestions });
   }

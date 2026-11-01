@@ -127,9 +127,9 @@ export function monthKey(now) {
 
 // Statements that switch Platinum on for a server: grant, refresh its accounts first, and
 // start this month's standings if they have not started yet.
-export function grantStatements(ctx, { guildId, days, note, source = "grant", now, startMonthly }) {
+export function grantStatements(ctx, { guildId, days, note, source = "grant", now, startMonthly, announce = false }) {
   const statements = [
-    pdb.grantPremiumStatement(ctx, { guildId, source, note, now, expiresAt: days ? now + days * DAY_MS : null }),
+    pdb.grantPremiumStatement(ctx, { guildId, source, note, now, expiresAt: days ? now + days * DAY_MS : null, announce }),
     pdb.prioritizeGuildRefreshStatement(ctx, guildId),
   ];
   if (startMonthly) statements.push(...pdb.monthlyBaselineStatements(ctx, guildId, monthKey(now), now));

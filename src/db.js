@@ -150,7 +150,15 @@ const MIGRATIONS = [
         source TEXT NOT NULL,
         note TEXT,
         granted_at INTEGER NOT NULL,
-        expires_at INTEGER
+        expires_at INTEGER,
+        welcome_status TEXT
+      )`,
+      // Names of the servers the bot is in, refreshed daily, for the owner's /admin tools.
+      `CREATE TABLE IF NOT EXISTS guild_directory (
+        guild_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        member_count INTEGER,
+        seen_at INTEGER NOT NULL
       )`,
       "ALTER TABLE guild_settings ADD COLUMN accent_color INTEGER",
       "ALTER TABLE guild_settings ADD COLUMN emoji_json TEXT",
@@ -998,5 +1006,14 @@ export function cleanupStatements(ctx, now) {
     ctx.db.prepare("DELETE FROM psn_trophy_cache WHERE tracked = 0 AND fetched_at < ?1").bind(month),
     ctx.db.prepare("DELETE FROM psn_username_cache WHERE fetched_at < ?1").bind(now - 90 * 24 * 60 * 60 * 1000),
     ctx.db.prepare("DELETE FROM psn_platinum_alerts WHERE alerted_at < ?1").bind(now - 365 * 24 * 60 * 60 * 1000),
+    // Platinum history is kept 90 days, and dropped once an account is unlinked everywhere;
+    // finished races go 90 days after their end (both promised in the privacy policy).
+    ctx.db
+      .prepare("DELETE FROM trophy_history WHERE day < ?1 OR psn_id NOT IN (SELECT psn_id FROM psn_trophy_cache WHERE tracked = 1)")
+      .bind(new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)),
+    ctx.db
+      .prepare("DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE status = 'ended' AND ends_at < ?1)")
+      .bind(now - 90 * 24 * 60 * 60 * 1000),
+    ctx.db.prepare("DELETE FROM races WHERE status = 'ended' AND ends_at < ?1").bind(now - 90 * 24 * 60 * 60 * 1000),
   ];
 }

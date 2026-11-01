@@ -14,6 +14,7 @@ import {
   name,
   noticeView,
   platformBadge,
+  premiumButton,
   rankBadge,
   relative,
   separator,
@@ -33,12 +34,43 @@ export function monthLabel(month) {
   return new Date(Date.UTC(year, monthNumber - 1, 1)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-export function premiumOnlyView() {
-  return noticeView({
+// Shown when a Platinum command is used without Platinum; with a buy button once payments
+// are connected (PREMIUM_SKU_ID).
+export function premiumOnlyView({ skuId = "" } = {}) {
+  const view = noticeView({
     tone: "info",
     title: "This is a Platinum feature",
-    body: "Platinum isn't active in this server.",
+    body: skuId ? "Platinum is a subscription for the whole server. A server admin can start it here:" : "Platinum isn't active in this server.",
   });
+  if (skuId) view.components[0].components.push(actionRow([premiumButton(skuId)]));
+  return view;
+}
+
+// One-time post when the owner gives a server Platinum with `announce`.
+export function welcomeMessage({ expiresAt, theme }) {
+  const until = expiresAt ? `free until <t:${Math.floor(expiresAt / 1000)}:D>` : "free, with no end date";
+  return message([
+    container(
+      [
+        text([`## ${theme.icons.platinum} This server now has Platinum`, `-# The bot's premium tier, ${until}. Nothing to pay.`].join("\n")),
+        separator(),
+        text(
+          [
+            "⚡ Trophies refresh every **2 hours** instead of 6",
+            "📅 `/monthly` standings: the top hunter is crowned on the 1st of each month",
+            "🏁 `/race` platinum races on one game, with live progress",
+            "🎮 `/game` boards for a single game · 📈 `/history` 8-week trends",
+            "💎 Platinum alerts now show how rare each platinum is",
+          ].join("\n")
+        ),
+        separator({ divider: false }),
+        text(
+          "-# Admins: `/platinum` sets milestone roles, a Hunter of the Month role, colours, trophy emojis, the weekly post time and CSV export. New commands can take a minute to appear."
+        ),
+      ],
+      theme.accent
+    ),
+  ]);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -349,10 +381,38 @@ export function adminStatsView({ stats, names, guildCount, premiumIds }) {
   );
 }
 
+const WELCOME_LABELS = { pending: "welcome post queued", no_channel: "no bot channel for the welcome post" };
+
+function welcomeLabel(status) {
+  if (!status) return "";
+  if (status.startsWith("posted:")) return ` · welcomed in <#${status.slice(7)}>`;
+  if (status.startsWith("failed:")) return " · welcome post failed";
+  return WELCOME_LABELS[status] ? ` · ${WELCOME_LABELS[status]}` : "";
+}
+
 export function adminListView({ rows, names }) {
   const lines = rows.map(
     (row) =>
-      `💠 **${escapeMarkdown(names.get(row.guild_id) || row.guild_id)}** · \`${row.guild_id}\` · ${row.source}${row.expires_at ? ` · until <t:${Math.floor(row.expires_at / 1000)}:D>` : ""}${row.note ? ` · ${escapeMarkdown(row.note)}` : ""}`
+      `💠 **${escapeMarkdown(names.get(row.guild_id) || row.guild_id)}** · \`${row.guild_id}\` · ${row.source}${row.expires_at ? ` · until <t:${Math.floor(row.expires_at / 1000)}:D>` : ""}${row.note ? ` · ${escapeMarkdown(row.note)}` : ""}${welcomeLabel(row.welcome_status)}`
   );
   return message([container([text(`### Platinum servers\n${lines.join("\n") || "None yet."}`)], COLORS.psn)], { ephemeral: true });
+}
+
+export function adminFindView({ rows, query }) {
+  const lines = rows.map(
+    (row) =>
+      `${Number(row.premium) === 1 ? "💠" : "▫️"} **${escapeMarkdown(row.name)}** · \`${row.guild_id}\` · ${fmt(row.member_count ?? 0)} members · ${fmt(row.links)} links`
+  );
+  return message(
+    [
+      container(
+        [
+          text(`### Servers matching "${escapeMarkdown(query)}"\n${lines.join("\n") || "None found."}`),
+          text("-# The server list refreshes once a day. Copy an ID into /admin grant."),
+        ],
+        COLORS.psn
+      ),
+    ],
+    { ephemeral: true }
+  );
 }

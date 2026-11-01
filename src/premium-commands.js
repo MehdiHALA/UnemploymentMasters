@@ -22,7 +22,7 @@ import {
 } from "./discord.js";
 import { forgetGuild, grantStatements, guildTitles, isOwner, monthKey, premiumGuildIds } from "./premium.js";
 import * as pui from "./premium-ui.js";
-import { sha256Hex, UserError, weeklySlot } from "./runtime.js";
+import { PremiumRequiredError, sha256Hex, UserError, weeklySlot } from "./runtime.js";
 import { noticeView } from "./ui.js";
 
 const sub = (name, description, options) => ({ type: OptionType.SUB_COMMAND, name, description, ...(options ? { options } : {}) });
@@ -113,11 +113,15 @@ export const OWNER_COMMANDS = [
         { type: OptionType.STRING, name: "server_id", description: "Server ID", required: true, min_length: 15, max_length: 25 },
         { type: OptionType.INTEGER, name: "days", description: "Days (empty = no end date)", required: false, min_value: 1, max_value: 3650 },
         { type: OptionType.STRING, name: "note", description: "Why (e.g. founder, test)", required: false, max_length: 100 },
+        { type: OptionType.BOOLEAN, name: "announce", description: "Post a welcome message in that server's bot channel", required: false },
       ]),
       sub("revoke", "Remove Platinum from a server", [
         { type: OptionType.STRING, name: "server_id", description: "Server ID", required: true, min_length: 15, max_length: 25 },
       ]),
       sub("list", "Servers with Platinum"),
+      sub("find", "Find a server's ID by name", [
+        { type: OptionType.STRING, name: "name", description: "Part of the server name", required: true, min_length: 2, max_length: 100 },
+      ]),
     ],
   },
 ];
@@ -236,9 +240,7 @@ async function syncOneGuild(ctx, guildId, now) {
 // Helpers.
 
 function requirePremium(ctx) {
-  if (!ctx.premium) {
-    throw new UserError("This is a Platinum feature", "Platinum isn't active in this server.", { tone: "info" });
-  }
+  if (!ctx.premium) throw new PremiumRequiredError();
 }
 
 function requireManager(interaction) {
@@ -268,9 +270,10 @@ function csvCell(value) {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+// Names from the daily server list, asking Discord only for servers it doesn't have yet.
 async function guildNames(ctx, ids) {
-  const names = new Map();
-  for (const id of ids.slice(0, 8)) {
+  const names = await pdb.getDirectoryNames(ctx, ids);
+  for (const id of ids.filter((id) => !names.has(id)).slice(0, 8)) {
     if (ctx.budget.remaining() < 4) break;
     const result = await getGuild(ctx, id);
     if (result.ok && result.data?.name) names.set(id, result.data.name);
@@ -622,14 +625,20 @@ export const premiumHandlers = {
         return { payload: pui.adminListView({ rows, names }) };
       }
 
+      if (action === "find") {
+        const query = getStringOption(interaction, "name").trim();
+        return { payload: pui.adminFindView({ rows: await pdb.findDirectory(ctx, query, 15), query }) };
+      }
+
       const guildId = getStringOption(interaction, "server_id");
       if (!/^\d{15,25}$/.test(guildId)) throw new UserError("That isn't a server ID", "Right-click the server icon → Copy Server ID (Developer Mode on).");
 
       if (action === "grant") {
         const days = getIntegerOption(interaction, "days");
         const note = getStringOption(interaction, "note") || null;
+        const announce = getOption(interaction, "announce") === true;
         const already = (await pdb.getActivePremiumGuilds(ctx, now)).some((row) => row.guild_id === guildId);
-        await ctx.db.batch(grantStatements(ctx, { guildId, days, note, now, startMonthly: !already }));
+        await ctx.db.batch(grantStatements(ctx, { guildId, days, note, now, startMonthly: !already, announce }));
         forgetGuild(guildId);
         const sync = await syncOneGuild(ctx, guildId, now);
         return {
@@ -641,7 +650,10 @@ export const premiumHandlers = {
               sync.failed
                 ? "Couldn't add the Platinum commands there. Is the bot in that server with the **applications.commands** scope?"
                 : "Platinum commands are live there now.",
-            ].join("\n"),
+              announce ? "A welcome post goes to their bot channel within 5 minutes." : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
           }),
         };
       }
