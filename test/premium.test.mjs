@@ -799,12 +799,22 @@ test("a welcome waits while the server's bot channel is broken, and goes out onc
   assert.equal(quiet.db.row("SELECT welcome_status FROM premium_guilds").welcome_status, "pending");
 });
 
+const premiumButtons = (payload) => findButtons(payload).filter((b) => b.style === 6);
+const SKU_ON_SALE = 4 | 128; // AVAILABLE and GUILD_SUBSCRIPTION
+
 test("once payments are connected, /support and Platinum-only replies offer Discord's buy button", async () => {
   const sku = "1300000000000000001";
   const bot = await createBot({ env: { PREMIUM_SKU_ID: sku } });
   bot.seedAuth();
   bot.seedAccounts(2, { cache: "fresh" });
-  const premiumButtons = (payload) => findButtons(payload).filter((b) => b.style === 6);
+  bot.discord.skus = [
+    { id: sku, type: 5, flags: SKU_ON_SALE, name: "Platinum" },
+    { id: "1300000000000000002", type: 6, flags: 128, name: "Platinum" },
+  ];
+  await bot.cron();
+  await bot.cron();
+  bot.clearCaches();
+  assert.equal(JSON.parse(bot.db.row("SELECT value FROM job_state WHERE key = 'premium_sku'").value).ready, true);
 
   const support = await bot.command("support");
   assert.deepEqual(support.replyErrors, []);
@@ -825,6 +835,29 @@ test("once payments are connected, /support and Platinum-only replies offer Disc
   const plain = await unlinked.command("support");
   assert.equal(premiumButtons(plain.final).length, 0, "nothing to buy while payments are disconnected");
   assert.doesNotMatch(allText(plain.final), /Platinum/);
+});
+
+test("buy buttons stay hidden until Discord lists the SKU as a server subscription on sale", async () => {
+  const sku = "1300000000000000001";
+  const cases = [
+    { label: "not published yet", skus: [{ id: sku, type: 5, flags: 128, name: "Platinum" }], found: true },
+    { label: "the group SKU instead of the subscription", skus: [{ id: sku, type: 6, flags: SKU_ON_SALE, name: "Platinum" }], found: true },
+    { label: "a personal subscription", skus: [{ id: sku, type: 5, flags: 4 | 256, name: "Platinum" }], found: true },
+    { label: "an ID from somewhere else", skus: [{ id: "1300000000000000009", type: 5, flags: SKU_ON_SALE, name: "Other" }], found: false },
+  ];
+  for (const { label, skus, found } of cases) {
+    const bot = await createBot({ env: { PREMIUM_SKU_ID: sku } });
+    bot.seedAuth();
+    bot.discord.skus = skus;
+    await bot.cron();
+    await bot.cron();
+    bot.clearCaches();
+    const status = JSON.parse(bot.db.row("SELECT value FROM job_state WHERE key = 'premium_sku'").value);
+    assert.deepEqual([status.found, status.ready], [found, false], label);
+    const support = await bot.command("support");
+    assert.equal(premiumButtons(support.final).length, 0, label);
+    assert.deepEqual(support.replyErrors, [], label);
+  }
 });
 
 test("daily cleanup keeps Platinum history for 90 days and drops old races", async () => {

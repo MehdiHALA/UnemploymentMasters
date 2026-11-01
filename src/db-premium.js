@@ -26,13 +26,15 @@ export async function getActivePremiumGuilds(ctx, now) {
   return results;
 }
 
-// Premium flag plus branding for one server, in one query.
+// Premium flag plus branding for one server, in one query. `premium_sku` is the background
+// job's latest check of PREMIUM_SKU_ID (whether buy buttons can be shown).
 export async function getGuildBranding(ctx, guildId, now) {
   return ctx.db
     .prepare(
       `SELECT ${isPremiumSql("?1", "?2")} AS premium,
               (SELECT expires_at FROM premium_guilds WHERE guild_id = ?1) AS expires_at,
               (SELECT source FROM premium_guilds WHERE guild_id = ?1) AS premium_source,
+              (SELECT value FROM job_state WHERE key = 'premium_sku') AS premium_sku,
               g.accent_color, g.emoji_json, g.weekly_day, g.weekly_hour, g.hunter_role_id,
               g.roles_error, g.leaderboard_channel_id, g.weekly_leaderboard_enabled
        FROM (SELECT ?1 AS gid) x

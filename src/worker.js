@@ -270,7 +270,7 @@ const PSN_ERRORS = {
 
 function errorPayload(err, ctx) {
   if (err instanceof PremiumRequiredError) {
-    return premiumOnlyView({ skuId: ctx?.settings?.premiumSkuId });
+    return premiumOnlyView({ skuId: ctx?.buySkuId || "" });
   }
 
   if (err instanceof UserError) {

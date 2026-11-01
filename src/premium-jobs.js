@@ -15,7 +15,7 @@ import {
 } from "./config.js";
 import * as db from "./db.js";
 import * as pdb from "./db-premium.js";
-import { listBotGuilds, listEntitlements, postChannelMessage, setMemberRole } from "./discord.js";
+import { listBotGuilds, listEntitlements, listSkus, postChannelMessage, setMemberRole } from "./discord.js";
 import { brandingTheme, entitlementUntil, isActiveServerEntitlement, monthKey } from "./premium.js";
 import { syncCommands } from "./premium-commands.js";
 import * as pui from "./premium-ui.js";
@@ -50,14 +50,42 @@ export async function loadPremiumState(ctx, now) {
   };
 }
 
-// Payment hook, inert until PREMIUM_SKU_ID is set: once an hour, mirror Discord's active
-// server subscriptions into premium_guilds, so paying servers keep Platinum even when quiet.
-// Runs before the commands stage, so a new subscriber gets the commands in the same run.
+// Discord's flags on a SKU: on sale, and bought for a whole server.
+const SKU_AVAILABLE = 1 << 2;
+const SKU_GUILD_SUBSCRIPTION = 1 << 7;
+
+// Whether PREMIUM_SKU_ID names a server subscription that is on sale (Discord lists two SKUs
+// per subscription; only the type 5 one is used). Buy buttons wait for this to be true, so a
+// wrong or unpublished SKU can't make Discord reject the bot's replies.
+export function skuStatus(skus, skuId, now) {
+  const list = Array.isArray(skus) ? skus : [];
+  const mine = list.find((s) => String(s.id) === skuId);
+  const flags = Number(mine?.flags || 0);
+  return {
+    id: skuId,
+    found: Boolean(mine),
+    type: mine?.type ?? null,
+    name: mine?.name ?? null,
+    flags,
+    ready: Boolean(mine) && Number(mine.type) === 5 && (flags & SKU_AVAILABLE) !== 0 && (flags & SKU_GUILD_SUBSCRIPTION) !== 0,
+    skus: list.slice(0, 10).map((s) => ({ id: String(s.id), type: s.type, flags: s.flags, name: s.name })),
+    checked_at: now,
+  };
+}
+
+// Payment hook, inert until PREMIUM_SKU_ID is set: once an hour, check the SKU is on sale and
+// mirror Discord's active server subscriptions into premium_guilds, so paying servers keep
+// Platinum even when quiet. Runs before the commands stage, so a new subscriber gets the
+// commands in the same run.
 export async function entitlementStage(ctx, now, premium, updates) {
   const sku = ctx.settings.premiumSkuId;
   const appId = premium.commandState.get("application_id");
   if (!sku || !appId || !ctx.env.DISCORD_BOT_TOKEN || ctx.budget.remaining() < 10) return;
   if (now - Number(premium.commandState.get("entitlements_synced_at") || 0) < ENTITLEMENT_SYNC_INTERVAL_MS) return;
+
+  const skus = await listSkus(ctx, appId);
+  if (skus.ok) updates.set("premium_sku", JSON.stringify(skuStatus(skus.data, sku, now)));
+  else console.warn(`SKU check failed: ${skus.status} ${skus.detail || ""}`);
 
   const active = [];
   let after = null;

@@ -313,8 +313,9 @@ export const handlers = {
   support: {
     mode: "sync",
     async run(ctx) {
-      // The Platinum buy button only appears once payments are connected, and not where it's active.
-      const skuId = ctx.premium ? "" : ctx.settings.premiumSkuId;
+      // The Platinum buy button only appears once the SKU is confirmed on sale, and not where
+      // Platinum is already active.
+      const skuId = ctx.premium ? "" : ctx.buySkuId || "";
       return { payload: ui.supportView({ supportUrl: normalizeSupportUrl(ctx.settings.supportUrl), skuId }) };
     },
   },
