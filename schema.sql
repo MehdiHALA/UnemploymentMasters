@@ -1,4 +1,4 @@
--- Full schema (version 2). The Worker creates and upgrades this automatically on first use,
+-- Full schema (version 3). The Worker creates and upgrades this automatically on first use,
 -- so running this file is only needed for a brand-new database you want to inspect first.
 -- test/schema.test.mjs checks that it matches what the built-in migrations produce.
 
@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS psn_trophy_cache (
   last_error TEXT,
   profile_checked_at INTEGER NOT NULL DEFAULT 0,
   alert_platinum INTEGER,
-  alert_synced_at INTEGER NOT NULL DEFAULT 0
+  alert_synced_at INTEGER NOT NULL DEFAULT 0,
+  titles_synced_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -40,7 +41,15 @@ CREATE TABLE IF NOT EXISTS guild_settings (
   weekly_leaderboard_enabled INTEGER NOT NULL DEFAULT 0,
   last_weekly_post_at INTEGER,
   updated_at INTEGER NOT NULL,
-  channel_error TEXT
+  channel_error TEXT,
+  accent_color INTEGER,
+  emoji_json TEXT,
+  weekly_day INTEGER,
+  weekly_hour INTEGER,
+  hunter_role_id TEXT,
+  hunter_discord_id TEXT,
+  monthly_month TEXT,
+  roles_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS psn_title_snapshots (
@@ -118,6 +127,83 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   cooldown_until INTEGER NOT NULL DEFAULT 0
 );
 
+-- Platinum (premium) tier.
+CREATE TABLE IF NOT EXISTS premium_guilds (
+  guild_id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  note TEXT,
+  granted_at INTEGER NOT NULL,
+  expires_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS milestone_roles (
+  guild_id TEXT NOT NULL,
+  platinums INTEGER NOT NULL,
+  role_id TEXT NOT NULL,
+  PRIMARY KEY (guild_id, platinums)
+);
+
+CREATE TABLE IF NOT EXISTS role_grants (
+  guild_id TEXT NOT NULL,
+  discord_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  granted_at INTEGER NOT NULL,
+  PRIMARY KEY (guild_id, discord_id, role_id)
+);
+
+CREATE TABLE IF NOT EXISTS monthly_baselines (
+  guild_id TEXT NOT NULL,
+  psn_id TEXT NOT NULL,
+  month TEXT NOT NULL,
+  platinum INTEGER NOT NULL DEFAULT 0,
+  gold INTEGER NOT NULL DEFAULT 0,
+  silver INTEGER NOT NULL DEFAULT 0,
+  bronze INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  baseline_at INTEGER NOT NULL,
+  PRIMARY KEY (guild_id, psn_id)
+);
+
+CREATE TABLE IF NOT EXISTS races (
+  id TEXT PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  channel_id TEXT,
+  np_communication_id TEXT NOT NULL,
+  np_service_name TEXT,
+  title_name TEXT NOT NULL,
+  title_icon_url TEXT,
+  platform TEXT,
+  created_by TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  ends_at INTEGER NOT NULL,
+  status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS race_participants (
+  race_id TEXT NOT NULL,
+  psn_id TEXT NOT NULL,
+  discord_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  progress INTEGER NOT NULL DEFAULT 0,
+  earned_total INTEGER NOT NULL DEFAULT 0,
+  finished_at INTEGER,
+  joined_at INTEGER NOT NULL,
+  checked_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (race_id, psn_id)
+);
+
+CREATE TABLE IF NOT EXISTS trophy_history (
+  psn_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  platinum INTEGER NOT NULL DEFAULT 0,
+  gold INTEGER NOT NULL DEFAULT 0,
+  silver INTEGER NOT NULL DEFAULT 0,
+  bronze INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  trophy_level INTEGER,
+  PRIMARY KEY (psn_id, day)
+);
+
 CREATE INDEX IF NOT EXISTS idx_psn_users_guild_id ON psn_users (guild_id);
 CREATE INDEX IF NOT EXISTS idx_psn_users_discord_guild ON psn_users (guild_id, discord_id);
 CREATE INDEX IF NOT EXISTS idx_psn_users_psn_id ON psn_users (psn_id);
@@ -129,6 +215,9 @@ CREATE INDEX IF NOT EXISTS idx_psn_username_cache_psn_id ON psn_username_cache (
 CREATE INDEX IF NOT EXISTS idx_cache_refresh ON psn_trophy_cache (tracked, next_refresh_at);
 CREATE INDEX IF NOT EXISTS idx_cache_profile ON psn_trophy_cache (tracked, profile_checked_at);
 CREATE INDEX IF NOT EXISTS idx_cache_alert_pending ON psn_trophy_cache (alert_synced_at) WHERE platinum > alert_platinum;
+CREATE INDEX IF NOT EXISTS idx_races_guild_status ON races (guild_id, status);
+CREATE INDEX IF NOT EXISTS idx_races_status_ends ON races (status, ends_at);
+CREATE INDEX IF NOT EXISTS idx_snapshots_title ON psn_title_snapshots (np_communication_id);
 
-INSERT INTO job_state (key, value, updated_at) VALUES ('schema_version', '2', 0)
+INSERT INTO job_state (key, value, updated_at) VALUES ('schema_version', '3', 0)
   ON CONFLICT(key) DO UPDATE SET value = excluded.value;

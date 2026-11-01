@@ -14,6 +14,8 @@ import {
   RECENT_MAX_LIMIT,
 } from "./config.js";
 import * as db from "./db.js";
+import * as pdb from "./db-premium.js";
+import { linkCap } from "./premium.js";
 import {
   getFocusedOption,
   getIntegerOption,
@@ -416,7 +418,7 @@ export const handlers = {
         throw new UserError(`${raw} is already linked`, "You're already on this server's leaderboard with that account.", { tone: "info" });
       }
 
-      const cap = hasManageGuild(interaction) ? ctx.settings.maxLinksPerModerator : ctx.settings.maxLinksPerUser;
+      const cap = linkCap(ctx, interaction);
       if (links.length >= cap) {
         throw new UserError(`You can link up to ${cap} accounts per server`, "Remove one with **/removepsn** to link another.");
       }
@@ -463,7 +465,8 @@ export const handlers = {
       if (stats) {
         statements.push(
           db.statsStatement(ctx, { psnId: account.psnId, name: account.onlineId, stats, now, nextRefreshAt: now + ctx.settings.cacheTtlMs, tracked: true }),
-          db.joinBaselineStatement(ctx, { guildId, linkId, psnId: account.psnId, discordId: userId, name: account.onlineId, stats, now })
+          db.joinBaselineStatement(ctx, { guildId, linkId, psnId: account.psnId, discordId: userId, name: account.onlineId, stats, now }),
+          ...(ctx.premium ? [pdb.joinMonthlyBaselineStatement(ctx, { guildId, psnId: account.psnId, stats, now })] : [])
         );
       } else if (privateTrophies) {
         statements.push(db.refreshFailureStatement(ctx, { psnId: account.psnId, error: "private", nextRefreshAt: now + 12 * 60 * MINUTE_MS }));

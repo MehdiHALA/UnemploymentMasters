@@ -15,8 +15,11 @@ import {
 } from "./config.js";
 import * as db from "./db.js";
 import { postChannelMessage } from "./discord.js";
+import { brandingTheme } from "./premium.js";
+import * as premiumJobs from "./premium-jobs.js";
 import {
   acquirePsn,
+  fetchPlatinumRarity,
   fetchProfile,
   fetchTitles,
   getPsnAuthReminderDecision,
@@ -43,16 +46,27 @@ export async function runScheduled(env, event = {}) {
   const settings = getSettings(env);
   const ctx = createContext(env, { now, workBudgetMs: 10 * MINUTE_MS, budget: new Budget(settings.subrequestBudget, 2) });
   ctx.theme = ui.createTheme(env);
-  const report = { weekly: 0, alerts: 0, refreshed: 0, profiles: 0, stage: "" };
+  const report = { weekly: 0, alerts: 0, refreshed: 0, profiles: 0, races: 0, raceChecks: 0, monthly: 0, roles: 0, titleSyncs: 0, stage: "" };
 
   try {
     await db.ensureSchema(ctx);
     const state = await db.getJobState(ctx, JOB_KEYS);
+    const premium = await premiumJobs.loadPremiumState(ctx, now);
     const updates = new Map();
 
+    await stage(report, "entitlements", () => premiumJobs.entitlementStage(ctx, now, premium, updates));
+    const hasPremium = premium.ids.size > 0;
+    await stage(report, "commands", () => premiumJobs.syncCommandsStage(ctx, premium, updates));
     await stage(report, "weekly", () => postDueWeekly(ctx, now, report));
+    if (hasPremium) await stage(report, "premium-weekly", () => premiumJobs.customWeeklyStage(ctx, now, report));
     await stage(report, "alerts", () => processAlerts(ctx, now, report));
+    if (hasPremium) await stage(report, "races", () => premiumJobs.racesStage(ctx, now, report));
     await stage(report, "refresh", () => refreshDue(ctx, now, report, state, updates));
+    if (hasPremium) {
+      await stage(report, "monthly", () => premiumJobs.monthlyStage(ctx, now, report));
+      await stage(report, "roles", () => premiumJobs.rolesStage(ctx, now, report));
+      await stage(report, "titles", () => premiumJobs.titleSyncStage(ctx, now, report));
+    }
     await stage(report, "maintenance", () => dailyMaintenance(ctx, now, state, updates));
     await stage(report, "profiles", () => backfillProfiles(ctx, now, report));
 
@@ -93,7 +107,7 @@ async function postDueWeekly(ctx, now, report) {
   const capacity = Math.floor((ctx.budget.remaining() - 6) / 4);
   if (capacity <= 0) return;
 
-  const guilds = await db.getDueWeeklyGuilds(ctx, slot, Math.min(capacity, 8));
+  const guilds = await db.getDueWeeklyGuilds(ctx, slot, Math.min(capacity, 8), now);
 
   for (const guild of guilds) {
     if (ctx.budget.remaining() < 4) break;
@@ -105,10 +119,11 @@ async function postDueWeekly(ctx, now, report) {
       continue;
     }
 
+    const theme = brandingTheme(ctx.env, guild, Number(guild.premium || 0) === 1);
     const result = await postChannelMessage(
       ctx,
       guild.leaderboard_channel_id,
-      ui.weeklyMessage(board, movers, { theme: ctx.theme, pageSize: LEADERBOARD_PAGE_SIZE })
+      ui.weeklyMessage(board, movers, { theme, pageSize: LEADERBOARD_PAGE_SIZE })
     );
 
     if (result.ok) {
@@ -184,13 +199,37 @@ async function processAlerts(ctx, now, report) {
     const recent = fresh.filter((title) => now - (Date.parse(title.lastUpdatedAt) || 0) <= ALERT_MAX_AGE_MS);
     if (recent.length === 0) continue;
 
-    const payload = ui.platinumAlertMessage(
-      { owner: account.psn_username, avatarUrl: account.avatar_url, titles: recent, platinumCount: Number(account.platinum) },
-      { theme: ctx.theme }
-    );
+    // Platinum servers also get how rare each platinum is (one PSN call per game).
+    const rarity = new Map();
+    if (context.targets.some((target) => Number(target.premium || 0) === 1)) {
+      try {
+        await acquirePsn(ctx, psnAllowance(ctx) + recent.length);
+      } catch (err) {
+        if (!(err instanceof PsnError)) throw err;
+      }
+      for (const title of recent) {
+        if (psnAllowance(ctx) <= 0 || ctx.budget.remaining() < context.targets.length + 2) break;
+        try {
+          rarity.set(title.npCommunicationId, await fetchPlatinumRarity(ctx, account.psn_id, title.npCommunicationId, title.npServiceName));
+        } catch (err) {
+          if (!(err instanceof PsnError)) throw err;
+        }
+      }
+    }
 
     for (const target of context.targets) {
       if (ctx.budget.remaining() < 1) break;
+      const premium = Number(target.premium || 0) === 1;
+      const payload = ui.platinumAlertMessage(
+        {
+          owner: account.psn_username,
+          avatarUrl: account.avatar_url,
+          titles: recent,
+          platinumCount: Number(account.platinum),
+          rarity: premium ? rarity : null,
+        },
+        { theme: brandingTheme(ctx.env, target, premium) }
+      );
       const result = await postChannelMessage(ctx, target.channel_id, payload);
       if (result.ok) {
         report.alerts += 1;

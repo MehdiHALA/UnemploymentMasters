@@ -141,6 +141,93 @@ const MIGRATIONS = [
       "CREATE INDEX IF NOT EXISTS idx_baselines_guild_psn ON weekly_trophy_baselines (guild_id, psn_id)",
     ],
   },
+  {
+    // Platinum (premium) tier.
+    version: 3,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS premium_guilds (
+        guild_id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        note TEXT,
+        granted_at INTEGER NOT NULL,
+        expires_at INTEGER
+      )`,
+      "ALTER TABLE guild_settings ADD COLUMN accent_color INTEGER",
+      "ALTER TABLE guild_settings ADD COLUMN emoji_json TEXT",
+      "ALTER TABLE guild_settings ADD COLUMN weekly_day INTEGER",
+      "ALTER TABLE guild_settings ADD COLUMN weekly_hour INTEGER",
+      "ALTER TABLE guild_settings ADD COLUMN hunter_role_id TEXT",
+      "ALTER TABLE guild_settings ADD COLUMN hunter_discord_id TEXT",
+      "ALTER TABLE guild_settings ADD COLUMN monthly_month TEXT",
+      "ALTER TABLE guild_settings ADD COLUMN roles_error TEXT",
+      "ALTER TABLE psn_trophy_cache ADD COLUMN titles_synced_at INTEGER NOT NULL DEFAULT 0",
+      `CREATE TABLE IF NOT EXISTS milestone_roles (
+        guild_id TEXT NOT NULL,
+        platinums INTEGER NOT NULL,
+        role_id TEXT NOT NULL,
+        PRIMARY KEY (guild_id, platinums)
+      )`,
+      `CREATE TABLE IF NOT EXISTS role_grants (
+        guild_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        granted_at INTEGER NOT NULL,
+        PRIMARY KEY (guild_id, discord_id, role_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS monthly_baselines (
+        guild_id TEXT NOT NULL,
+        psn_id TEXT NOT NULL,
+        month TEXT NOT NULL,
+        platinum INTEGER NOT NULL DEFAULT 0,
+        gold INTEGER NOT NULL DEFAULT 0,
+        silver INTEGER NOT NULL DEFAULT 0,
+        bronze INTEGER NOT NULL DEFAULT 0,
+        total INTEGER NOT NULL DEFAULT 0,
+        baseline_at INTEGER NOT NULL,
+        PRIMARY KEY (guild_id, psn_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS races (
+        id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT,
+        np_communication_id TEXT NOT NULL,
+        np_service_name TEXT,
+        title_name TEXT NOT NULL,
+        title_icon_url TEXT,
+        platform TEXT,
+        created_by TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        ends_at INTEGER NOT NULL,
+        status TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS race_participants (
+        race_id TEXT NOT NULL,
+        psn_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        progress INTEGER NOT NULL DEFAULT 0,
+        earned_total INTEGER NOT NULL DEFAULT 0,
+        finished_at INTEGER,
+        joined_at INTEGER NOT NULL,
+        checked_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (race_id, psn_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS trophy_history (
+        psn_id TEXT NOT NULL,
+        day TEXT NOT NULL,
+        platinum INTEGER NOT NULL DEFAULT 0,
+        gold INTEGER NOT NULL DEFAULT 0,
+        silver INTEGER NOT NULL DEFAULT 0,
+        bronze INTEGER NOT NULL DEFAULT 0,
+        total INTEGER NOT NULL DEFAULT 0,
+        trophy_level INTEGER,
+        PRIMARY KEY (psn_id, day)
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_races_guild_status ON races (guild_id, status)",
+      "CREATE INDEX IF NOT EXISTS idx_races_status_ends ON races (status, ends_at)",
+      "CREATE INDEX IF NOT EXISTS idx_snapshots_title ON psn_title_snapshots (np_communication_id)",
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;
@@ -561,11 +648,15 @@ export function profileStatement(ctx, { psnId, name, avatarUrl, isPlus, now }) {
     .bind(psnId, name || "", avatarUrl || null, isPlus === undefined || isPlus === null ? null : Number(Boolean(isPlus)), now);
 }
 
+// `is_premium` marks accounts linked in a Platinum server (refreshed more often, with history).
+const IS_PREMIUM_ACCOUNT = `EXISTS (SELECT 1 FROM psn_users pu JOIN premium_guilds pg ON pg.guild_id = pu.guild_id
+  WHERE pu.psn_id = psn_trophy_cache.psn_id AND (pg.expires_at IS NULL OR pg.expires_at > ?1)) AS is_premium`;
+
 export async function getDueAccounts(ctx, now, limit, guildId = null) {
   const statement = guildId
     ? ctx.db
         .prepare(
-          `SELECT psn_id, psn_username, platinum, fetched_at, fail_count FROM psn_trophy_cache
+          `SELECT psn_id, psn_username, platinum, fetched_at, fail_count, ${IS_PREMIUM_ACCOUNT} FROM psn_trophy_cache
            WHERE tracked = 1 AND next_refresh_at <= ?1
              AND psn_id IN (SELECT psn_id FROM psn_users WHERE guild_id = ?2)
            ORDER BY next_refresh_at LIMIT ?3`
@@ -573,7 +664,7 @@ export async function getDueAccounts(ctx, now, limit, guildId = null) {
         .bind(now, guildId, limit)
     : ctx.db
         .prepare(
-          `SELECT psn_id, psn_username, platinum, fetched_at, fail_count FROM psn_trophy_cache
+          `SELECT psn_id, psn_username, platinum, fetched_at, fail_count, ${IS_PREMIUM_ACCOUNT} FROM psn_trophy_cache
            WHERE tracked = 1 AND next_refresh_at <= ?1
            ORDER BY next_refresh_at LIMIT ?2`
         )
@@ -626,14 +717,16 @@ export async function getAlertContext(ctx, psnId, communicationIds) {
       .bind(psnId, ...ids),
     ctx.db
       .prepare(
-        `SELECT DISTINCT u.guild_id, g.leaderboard_channel_id AS channel_id
+        `SELECT DISTINCT u.guild_id, g.leaderboard_channel_id AS channel_id, g.accent_color, g.emoji_json,
+                EXISTS (SELECT 1 FROM premium_guilds p WHERE p.guild_id = u.guild_id
+                        AND (p.expires_at IS NULL OR p.expires_at > ?2)) AS premium
          FROM psn_users u
          JOIN guild_settings g ON g.guild_id = u.guild_id
          WHERE u.psn_id = ?1 AND g.weekly_leaderboard_enabled = 1
            AND g.leaderboard_channel_id IS NOT NULL AND g.leaderboard_channel_id != ''
            AND g.channel_error IS NULL`
       )
-      .bind(psnId),
+      .bind(psnId, ctx.now ?? Date.now()),
   ]);
 
   return {
@@ -782,18 +875,25 @@ export function channelErrorStatement(ctx, guildId, error, now) {
     .bind(guildId, error, now);
 }
 
-export async function getDueWeeklyGuilds(ctx, slotStart, limit) {
+// Servers due for the standard Sunday post. Platinum servers with their own schedule are
+// handled by the premium job instead.
+export async function getDueWeeklyGuilds(ctx, slotStart, limit, now = Date.now()) {
   const { results = [] } = await ctx.db
     .prepare(
-      `SELECT guild_id, leaderboard_channel_id FROM guild_settings
-       WHERE weekly_leaderboard_enabled = 1
-         AND leaderboard_channel_id IS NOT NULL AND leaderboard_channel_id != ''
-         AND channel_error IS NULL
-         AND (last_weekly_post_at IS NULL OR last_weekly_post_at < ?1)
-       ORDER BY COALESCE(last_weekly_post_at, 0)
+      `SELECT g.guild_id, g.leaderboard_channel_id, g.accent_color, g.emoji_json,
+              EXISTS (SELECT 1 FROM premium_guilds p WHERE p.guild_id = g.guild_id
+                      AND (p.expires_at IS NULL OR p.expires_at > ?3)) AS premium
+       FROM guild_settings g
+       WHERE g.weekly_leaderboard_enabled = 1
+         AND g.leaderboard_channel_id IS NOT NULL AND g.leaderboard_channel_id != ''
+         AND g.channel_error IS NULL
+         AND (g.last_weekly_post_at IS NULL OR g.last_weekly_post_at < ?1)
+         AND NOT (g.weekly_day IS NOT NULL AND EXISTS (SELECT 1 FROM premium_guilds p WHERE p.guild_id = g.guild_id
+                                                       AND (p.expires_at IS NULL OR p.expires_at > ?3)))
+       ORDER BY COALESCE(g.last_weekly_post_at, 0)
        LIMIT ?2`
     )
-    .bind(slotStart, limit)
+    .bind(slotStart, limit, now)
     .all();
   return results;
 }

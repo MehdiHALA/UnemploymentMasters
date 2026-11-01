@@ -18,7 +18,8 @@ import {
   PSN_USERNAME_CACHE_TTL_MS,
 } from "./config.js";
 import * as db from "./db.js";
-import { BudgetExceededError, mapLimit, nullableNumber, toNumber } from "./runtime.js";
+import * as pdb from "./db-premium.js";
+import { BudgetExceededError, mapLimit, nullableNumber, toNumber, utcDay } from "./runtime.js";
 
 // codes: auth | not_found | private | rate_limited | unavailable | budget
 export class PsnError extends Error {
@@ -416,6 +417,40 @@ export function normalizeTitle(psnId, title, psnUsername = "") {
   };
 }
 
+// One player's progress in one game. Returns null when they have never played it.
+export async function fetchTitleEarnings(ctx, accountId, npCommunicationId, npServiceName) {
+  const query = new URLSearchParams({ npServiceName: npServiceName || "trophy2" });
+  try {
+    const response = await psnRequest(
+      ctx,
+      `${PSN_TROPHY_BASE_URL}/users/${encodeURIComponent(accountId)}/npCommunicationIds/${encodeURIComponent(npCommunicationId)}/trophyGroups?${query}`
+    );
+    const earned = response?.earnedTrophies || {};
+    const counts = ["platinum", "gold", "silver", "bronze"].map((key) => toNumber(earned[key]));
+    return {
+      progress: toNumber(response?.progress),
+      platinum: counts[0],
+      earnedTotal: counts.reduce((sum, value) => sum + value, 0),
+      lastUpdatedAt: response?.lastUpdatedDateTime || "",
+    };
+  } catch (err) {
+    if (err instanceof PsnError && err.code === "not_found") return null;
+    throw err;
+  }
+}
+
+// Share of players who earned this game's platinum (e.g. 2.3 for 2.3%), or null.
+export async function fetchPlatinumRarity(ctx, accountId, npCommunicationId, npServiceName) {
+  const query = new URLSearchParams({ npServiceName: npServiceName || "trophy2" });
+  const response = await psnRequest(
+    ctx,
+    `${PSN_TROPHY_BASE_URL}/users/${encodeURIComponent(accountId)}/npCommunicationIds/${encodeURIComponent(npCommunicationId)}/trophyGroups/all/trophies?${query}`
+  );
+  const platinum = (response?.trophies || []).find((trophy) => trophy.trophyType === "platinum");
+  const rate = Number.parseFloat(platinum?.trophyEarnedRate);
+  return Number.isFinite(rate) ? rate : null;
+}
+
 export async function fetchProfile(ctx, accountId) {
   const profile = await psnRequest(ctx, `${PSN_PROFILE_BASE_URL}/${encodeURIComponent(accountId)}/profiles`);
   return {
@@ -530,16 +565,20 @@ export async function refreshAccounts(ctx, accounts, { now = Date.now(), concurr
     const account = usable[index];
 
     if (result.ok) {
-      const jitter = Math.floor(Math.random() * 0.1 * ctx.settings.cacheTtlMs);
+      // Accounts linked in a Platinum server refresh more often and keep a daily history.
+      const premium = Number(account.is_premium || 0) === 1;
+      const ttl = premium ? ctx.settings.premiumCacheTtlMs : ctx.settings.cacheTtlMs;
+      const jitter = Math.floor(Math.random() * 0.1 * ttl);
       statements.push(
         db.statsStatement(ctx, {
           psnId: account.psn_id,
           name: account.psn_username,
           stats: result.value,
           now,
-          nextRefreshAt: now + ctx.settings.cacheTtlMs + jitter,
+          nextRefreshAt: now + ttl + jitter,
         })
       );
+      if (premium) statements.push(pdb.historyStatement(ctx, { psnId: account.psn_id, day: utcDay(now), stats: result.value }));
       refreshed.push({ ...account, stats: result.value });
       return;
     }

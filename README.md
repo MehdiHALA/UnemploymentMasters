@@ -18,6 +18,29 @@ Per-server PlayStation trophy leaderboards for Discord: link your PSN account, c
 | `/weeklyleaderboard set/disable/post` | Weekly standings (Sundays 16:00 UTC) and platinum alerts in a channel |
 | `/support` | Support link |
 
+## 💠 Platinum (per-server premium)
+
+Platinum is switched on per server, never per member. Its commands only appear in servers that have it, so free servers see nothing new.
+
+| Perk | What it does |
+| --- | --- |
+| Faster updates | Trophies refresh every **2 hours** instead of 6, with a daily history |
+| `/monthly` | This month's standings; on the 1st the top hunter is announced and can get a **Hunter of the Month** role |
+| `/race start/join/leave/status/end` | Platinum races on one game: join button, progress every 30 minutes, finisher posts, final standings |
+| `/game title` | Leaderboard for one game among the server's members |
+| `/history [user]` | 8-week trend of platinums and trophies |
+| Rarity in alerts | Platinum alerts show how rare the platinum is (e.g. *only 1.7% of players*) |
+| `/platinum milestone add/remove/list` | Roles at platinum counts (e.g. 50 → *Plat Hunter*), kept in sync automatically |
+| `/platinum color` · `emojis` · `weekly` · `hunter` | Brand colour, custom trophy emojis, weekly post day and hour, Hunter role |
+| `/platinum export` | The leaderboard as a CSV file |
+| More links | 6 accounts per member (100 for moderators) instead of 3 (50) |
+
+**Turning it on.** The owner uses `/admin grant server_id [days] [note]` in the owner's server (`OWNER_GUILD_ID`), where `/admin` is the only extra command. `/admin revoke`, `/admin list` and `/admin stats` (servers, links, Platinum, PSN health) sit alongside it. For testing, `PREMIUM_GUILD_IDS` lists servers that always have Platinum.
+
+**Payments are not connected.** Nothing is sold until `PREMIUM_SKU_ID` is set. Once a server subscription SKU exists in the Discord developer portal and its id is in `PREMIUM_SKU_ID`, a server that buys it gets Platinum on its next command (or within the hour, from a background check of Discord's active subscriptions) for as long as the subscription runs. Personal (user) purchases are ignored, and a manual grant is never shortened by a subscription.
+
+**Commands register themselves.** The background job keeps the global commands in sync and adds or removes the Platinum commands in each server as Platinum is granted or ends. It only calls Discord when something changed. All Platinum background work is skipped while no server has Platinum, and it shares the same 45-subrequest budget as everything else.
+
 ## ⚙️ How it stays inside the Free plan
 
 Workers Free allows **50 subrequests** (fetch + D1) and **10 ms CPU** per invocation, and background work after a reply is cut off after **30 s**. The bot is built around those limits:
@@ -27,7 +50,7 @@ Workers Free allows **50 subrequests** (fetch + D1) and **10 ms CPU** per invoca
 - **A shared PSN rate limiter** (240 calls per 15 minutes per PSN account) protects the bot's PSN account; a 429 from Sony pauses all calls until Sony's retry time.
 - **Every request ends in a reply.** If something is slow the bot shows "thinking…" and edits the answer in; if Discord rejects a layout it falls back to plain text.
 
-Rough capacity with the defaults: ~7,200 refreshes a day, so about 1,800 linked accounts stay fresher than 6 hours (3,600 within 12 hours). Beyond that, data just refreshes less often. More headroom comes from a second PSN account (`PSN_NPSSO_BACKUP`) before any paid plan is needed.
+Rough capacity with the defaults: ~7,200 refreshes a day, so about 1,800 linked accounts stay fresher than 6 hours (3,600 within 12 hours). An account in a Platinum server uses 12 refreshes a day instead of 4. Beyond that, data just refreshes less often. More headroom comes from a second PSN account (`PSN_NPSSO_BACKUP`) before any paid plan is needed.
 
 ## 🎮 Use a dedicated PSN account
 
@@ -53,8 +76,8 @@ npm install
    ```
    Optional: `PSN_NPSSO_BACKUP` (second bot account), `SUPPORT_URL`, `OPS_CHANNEL_ID`.
 3. **Deploy.** `npm run cf:deploy`
-4. **Register commands.** `DISCORD_BOT_TOKEN=... DISCORD_APPLICATION_ID=... npm run cf:register` (add `DISCORD_GUILD_ID=...` to test in one server instantly).
-5. **Discord developer portal.** Set *Interactions Endpoint URL* to your Worker URL. Invite the bot with the `bot` and `applications.commands` scopes so it can post weekly standings.
+4. **Commands.** The first background run (within 5 minutes) registers them with the bot token. To do it by hand instead: `DISCORD_BOT_TOKEN=... DISCORD_APPLICATION_ID=... npm run cf:register` (add `DISCORD_GUILD_ID=...` to test in one server instantly).
+5. **Discord developer portal.** Set *Interactions Endpoint URL* to your Worker URL. Invite the bot with the `bot` and `applications.commands` scopes so it can post weekly standings. Platinum milestone and Hunter roles also need **Manage Roles**, with the bot's role above those roles.
 
 ## 🔧 Configuration
 
@@ -73,6 +96,12 @@ npm install
 | `MAX_LINKS_PER_MODERATOR` | `50` | Same, for members with Manage Server (who link for their community) |
 | `SUBREQUEST_BUDGET` | `45` | Raise (e.g. `500`) only on the Workers Paid plan |
 | `EMOJI_PLATINUM` / `_GOLD` / `_SILVER` / `_BRONZE` | 🏆 🟡 ⚪ 🟤 | Custom trophy emojis, e.g. `<:plat:123…>` |
+| `OWNER_GUILD_ID` | Outplayed Trash | The owner's server, the only place `/admin` is registered (administrators there can use it) |
+| `OWNER_USER_IDS` | — | Optional user ids allowed to use `/admin` without being an administrator there |
+| `PREMIUM_GUILD_IDS` | — | Servers that always have Platinum (testing), comma-separated |
+| `PREMIUM_SKU_ID` | — | Discord server-subscription SKU that unlocks Platinum. Leave empty: payments stay disconnected |
+| `PREMIUM_CACHE_TTL_HOURS` | `2` | Refresh interval for accounts in Platinum servers |
+| `PREMIUM_LINKS_PER_USER` / `PREMIUM_LINKS_PER_MODERATOR` | `6` / `100` | Link caps in Platinum servers |
 
 ## 🧪 Development
 
@@ -80,7 +109,7 @@ npm install
 npm test
 ```
 
-The tests run the real Worker against an in-memory SQLite database and fake PSN and Discord APIs, with the Free plan's 50-subrequest cap enforced and every message checked against Discord's component limits. They cover all commands in a 1,000-account server, the background job (refresh rotation, platinum alerts, weekly posts, rate limiting, PSN login failures), the database upgrade from the previous version, and the layouts.
+The tests run the real Worker against an in-memory SQLite database and fake PSN and Discord APIs, with the Free plan's 50-subrequest cap enforced and every message checked against Discord's component limits. They cover all commands in a 1,000-account server, the background job (refresh rotation, platinum alerts, weekly posts, rate limiting, PSN login failures), every Platinum feature (grants, command registration, races, monthly standings, milestone roles, the payment hook), the database upgrades from previous versions, the command definitions, and the layouts.
 
 `npx wrangler tail` shows a log line per command and per background run with the number of subrequests used.
 

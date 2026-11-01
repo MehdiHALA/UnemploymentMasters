@@ -22,13 +22,18 @@ const TIER_GROUPS = [
   { from: 1, name: "Bronze", color: COLORS.bronze },
 ];
 
-export function createTheme(env = {}) {
+// `branding` comes from a Platinum server's settings: { accent, emojis: { platinum, ... } }.
+export function createTheme(env = {}, branding = {}) {
+  const emojis = branding.emojis || {};
+  const accent = Number.isInteger(branding.accent) ? branding.accent : null;
   return {
+    accent: accent ?? COLORS.psn,
+    custom: accent !== null,
     icons: {
-      platinum: env.EMOJI_PLATINUM || "🏆",
-      gold: env.EMOJI_GOLD || "🟡",
-      silver: env.EMOJI_SILVER || "⚪",
-      bronze: env.EMOJI_BRONZE || "🟤",
+      platinum: emojis.platinum || env.EMOJI_PLATINUM || "🏆",
+      gold: emojis.gold || env.EMOJI_GOLD || "🟡",
+      silver: emojis.silver || env.EMOJI_SILVER || "⚪",
+      bronze: emojis.bronze || env.EMOJI_BRONZE || "🟤",
       medals: ["🥇", "🥈", "🥉"],
       sync: "⏳",
     },
@@ -86,7 +91,7 @@ export function message(components, { ephemeral = false } = {}) {
 }
 
 // Text plus an image when we have one; Discord requires a section accessory.
-function withImage(content, imageUrl, description) {
+export function withImage(content, imageUrl, description) {
   return imageUrl ? section(content, thumbnail(imageUrl, description)) : text(content);
 }
 
@@ -115,29 +120,29 @@ function splitBar(a, b, size = 10) {
 }
 
 export const relative = (ms) => (ms ? `<t:${Math.floor(ms / 1000)}:R>` : "never");
-const shortDate = (ms) => (ms ? `<t:${Math.floor(ms / 1000)}:d>` : "");
+export const shortDate = (ms) => (ms ? `<t:${Math.floor(ms / 1000)}:d>` : "");
 
 function tierInfo(tier) {
   const value = Number(tier || 0);
   return TIER_GROUPS.find((group) => value >= group.from) || null;
 }
 
-function rankBadge(rank, theme) {
+export function rankBadge(rank, theme) {
   return theme.icons.medals[rank - 1] || `\`#${rank}\``;
 }
 
-function trophyLine(stats, theme, { bold = "platinum" } = {}) {
+export function trophyLine(stats, theme, { bold = "platinum" } = {}) {
   const { icons } = theme;
   const value = (key) => (key === bold ? `**${fmt(stats[key])}**` : fmt(stats[key]));
   return `${icons.platinum} ${value("platinum")} · ${icons.gold} ${value("gold")} · ${icons.silver} ${value("silver")} · ${icons.bronze} ${value("bronze")}`;
 }
 
-function platformBadge(platform) {
+export function platformBadge(platform) {
   return platform ? String(platform).split(",").map((p) => `\`${p.trim()}\``).join(" ") : "";
 }
 
-const name = (row) => escapeMarkdown(row.name || row.psn_username || row.onlineId || "Unknown");
-const mention = (id) => (id && /^\d+$/.test(String(id)) ? `<@${id}>` : "");
+export const name = (row) => escapeMarkdown(row.name || row.psn_username || row.onlineId || "Unknown");
+export const mention = (id) => (id && /^\d+$/.test(String(id)) ? `<@${id}>` : "");
 
 // ---------------------------------------------------------------------------------------
 // Generic notices.
@@ -200,7 +205,7 @@ export function leaderboardView(data, { page, pageSize, theme, title = "Trophy L
       message = "🔒 Every linked account here has private trophies.\nSet **Trophies** to **Anyone** in PSN privacy settings to be ranked.";
     }
     children.push(text(message));
-    return container(children, COLORS.psn);
+    return container(children, theme.accent);
   }
 
   const podium = page === 1 ? data.rows.slice(0, 3) : [];
@@ -246,7 +251,7 @@ export function leaderboardView(data, { page, pageSize, theme, title = "Trophy L
     );
   }
 
-  return container(children, COLORS.psn);
+  return container(children, theme.accent);
 }
 
 export function leaderboardMessage(data, options) {
@@ -299,7 +304,7 @@ export function rankView(data, { theme }) {
         ...(lines.length > 0 ? [separator({ divider: false }), text(lines.join("\n"))] : []),
         text(`-# Updated ${relative(row.fetched_at)}`),
       ],
-      COLORS.psn
+      theme.accent
     );
   });
 
@@ -346,7 +351,7 @@ export function profileView(data, { theme, targetUserId }) {
       children.push(text(`${icons.sync} Syncing — stats appear within a few minutes.`));
     }
 
-    return container(children, tier?.color ?? COLORS.psn);
+    return container(children, theme.custom ? theme.accent : tier?.color ?? theme.accent);
   });
 
   return message(containers);
@@ -387,7 +392,7 @@ export function recentView({ titles, names, stale }, { theme }) {
   }
 
   children.push(text(`-# ${stale ? "Cached copy — PSN didn't answer just now" : `Latest ${titles.length} game${titles.length === 1 ? "" : "s"}`}`));
-  return message([container(children, COLORS.psn)]);
+  return message([container(children, theme.accent)]);
 }
 
 export function platinumsView({ titles, owner, totalPlatinum, scanned, stale }, { theme }) {
@@ -463,7 +468,7 @@ export function compareView({ a, b }, { theme }) {
         separator(),
         text(`### Head-to-head\n${rows.join("\n")}\n\n${verdict}`),
       ],
-      COLORS.psn
+      theme.accent
     ),
   ]);
 }
@@ -512,23 +517,30 @@ export function weeklyMessage(leaderboardData, moversData, { theme, pageSize }) 
   return message(parts);
 }
 
-export function platinumAlertMessage({ owner, avatarUrl, titles, platinumCount }, { theme }) {
-  const containers = titles.slice(0, 3).map((title, index) =>
-    container(
+// `rarity` (Platinum servers) maps a game's npCommunicationId to the % of players with its platinum.
+export function platinumAlertMessage({ owner, avatarUrl, titles, platinumCount, rarity = null }, { theme }) {
+  const containers = titles.slice(0, 3).map((title, index) => {
+    const rate = rarity?.get(title.npCommunicationId);
+    const rareLine =
+      rate === null || rate === undefined ? "" : `${rate < 5 ? "💎 Rare: only" : "📊 Earned by"} **${rate.toFixed(rate < 1 ? 2 : 1)}%** of players`;
+    return container(
       [
         withImage(
           [
             `## ${theme.icons.platinum} New platinum!`,
             `**${escapeMarkdown(owner)}** just platinumed **${escapeMarkdown(title.titleName)}** ${platformBadge(title.platform)}`,
+            rareLine,
             `-# Platinum #${fmt(platinumCount - index)} · ${fmt(title.total)} trophies in this game`,
-          ].join("\n"),
+          ]
+            .filter(Boolean)
+            .join("\n"),
           title.titleIconUrl || avatarUrl,
           title.titleName
         ),
       ],
-      COLORS.gold
-    )
-  );
+      theme.custom ? theme.accent : COLORS.gold
+    );
+  });
   return message(containers);
 }
 
