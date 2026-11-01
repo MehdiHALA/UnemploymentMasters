@@ -5,8 +5,14 @@ compatibility_date = "2026-06-11"
 [vars]
 DISCORD_PUBLIC_KEY = "16e9e7469914be61ec1a28a0afe45344730efec37ee7d53c8b4a4da6d59f5e6d"
 
+# One background run every 5 minutes: weekly posts (Sundays 16:00 UTC), platinum alerts,
+# trophy refreshes and daily maintenance. Each run stays inside Workers Free limits.
 [triggers]
-crons = ["0 16 * * SUN", "0 * * * *"]
+crons = ["*/5 * * * *"]
+
+# Shows per-run subrequest counts and any errors under Workers & Pages > Logs.
+[observability]
+enabled = true
 
 [[d1_databases]]
 binding = "DB"

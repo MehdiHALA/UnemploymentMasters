@@ -1,3 +1,9 @@
 DISCORD_PUBLIC_KEY=
+DISCORD_BOT_TOKEN=
+# NPSSO of a PSN account dedicated to the bot (not your personal account).
 PSN_NPSSO=
+# Optional second bot account: used automatically if the first can't log in or hits PSN's rate limit.
+PSN_NPSSO_BACKUP=
+# Optional: where PSN login reminders go (defaults to the original Outplayed Trash channel).
+OPS_CHANNEL_ID=
 SUPPORT_URL=
