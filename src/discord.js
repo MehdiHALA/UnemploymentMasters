@@ -248,6 +248,11 @@ export function listBotGuilds(ctx, after = null) {
   return botRequest(ctx, "GET", `/users/@me/guilds?${query}`);
 }
 
+// The app's SKUs (premium offerings) with their type and flags.
+export function listSkus(ctx, applicationId) {
+  return botRequest(ctx, "GET", `/applications/${applicationId}/skus`);
+}
+
 // Active purchases of one SKU, oldest first, 100 per page (pass the last id as `after`).
 export function listEntitlements(ctx, applicationId, skuId, after = null) {
   const query = new URLSearchParams({ sku_ids: skuId, exclude_ended: "true", exclude_deleted: "true", limit: "100" });

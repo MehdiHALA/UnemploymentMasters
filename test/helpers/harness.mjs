@@ -350,6 +350,8 @@ export function createDiscord() {
     // Servers the bot is in, for GET /users/@me/guilds: { id, name, approximate_member_count }.
     botGuilds: [],
     guildListCalls: 0,
+    // The app's SKUs, for GET /applications/{id}/skus: { id, type, flags, name }.
+    skus: [],
 
     async handle(url, method, init) {
       const parts = url.pathname.split("/").filter(Boolean);
@@ -364,6 +366,7 @@ export function createDiscord() {
       }
 
       if (parts[2] === "applications") {
+        if (parts[4] === "skus") return json(discord.skus);
         if (parts[4] === "entitlements") {
           discord.entitlementCalls += 1;
           const skus = (url.searchParams.get("sku_ids") || "").split(",");

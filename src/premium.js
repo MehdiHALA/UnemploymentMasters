@@ -75,9 +75,23 @@ async function brandingFor(ctx, guildId, now) {
   return value;
 }
 
-// Sets ctx.premium, ctx.branding and ctx.theme for an interaction.
+// The SKU to put on buy buttons: PREMIUM_SKU_ID, once the background check has confirmed it is
+// a server subscription on sale. Empty otherwise, so no button is shown.
+function buyableSku(ctx, statusJson) {
+  const sku = ctx.settings.premiumSkuId;
+  if (!sku || !statusJson) return "";
+  try {
+    const status = JSON.parse(statusJson);
+    return status.ready === true && status.id === sku ? sku : "";
+  } catch {
+    return "";
+  }
+}
+
+// Sets ctx.premium, ctx.branding, ctx.theme and ctx.buySkuId for an interaction.
 export async function loadGuildContext(ctx, interaction) {
   const guildId = interaction.guild_id;
+  ctx.buySkuId = "";
   if (!guildId) {
     ctx.premium = false;
     return ctx;
@@ -96,6 +110,7 @@ export async function loadGuildContext(ctx, interaction) {
   ctx.premium = stored || ctx.settings.premiumGuildIds.includes(guildId) || Boolean(entitlement);
   ctx.branding = branding;
   ctx.theme = brandingTheme(ctx.env, branding, ctx.premium);
+  ctx.buySkuId = buyableSku(ctx, branding.premium_sku);
 
   // Payment hook: remember paying servers so background jobs treat them as Platinum too.
   // Written at most about once a day; the statement itself never shortens what is stored.
