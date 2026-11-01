@@ -137,6 +137,16 @@ test("/addpsn caps accounts per member", async () => {
   assert.match(allText(result.final), /up to 2 accounts/);
 });
 
+test("/addpsn lets moderators link accounts for their community beyond the member cap", async () => {
+  const bot = await createBot();
+  bot.seedAuth();
+  bot.seedAccounts(26, { cache: "fresh", linkedBy: () => discordId(7) });
+  bot.psn.add(makeAccount(951, { onlineId: "Newcomer" }));
+
+  const result = await bot.command("addpsn", [option("username", "Newcomer")], bot.asUser(7, MANAGE_GUILD));
+  assert.match(allText(result.final), /Linked \*\*Newcomer\*\*/);
+});
+
 test("/addpsn on a private profile links it and explains how to rank", async () => {
   const bot = await createBot();
   bot.seedAuth();

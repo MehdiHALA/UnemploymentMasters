@@ -416,11 +416,9 @@ export const handlers = {
         throw new UserError(`${raw} is already linked`, "You're already on this server's leaderboard with that account.", { tone: "info" });
       }
 
-      if (links.length >= ctx.settings.maxLinksPerUser) {
-        throw new UserError(
-          `You can link up to ${ctx.settings.maxLinksPerUser} accounts per server`,
-          "Remove one with **/removepsn** to link another."
-        );
+      const cap = hasManageGuild(interaction) ? ctx.settings.maxLinksPerModerator : ctx.settings.maxLinksPerUser;
+      if (links.length >= cap) {
+        throw new UserError(`You can link up to ${cap} accounts per server`, "Remove one with **/removepsn** to link another.");
       }
 
       cooldown(interaction, "addpsn");

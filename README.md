@@ -70,6 +70,7 @@ npm install
 | `REFRESH_PER_RUN` | `25` | Accounts refreshed per 5-minute run |
 | `PSN_CALLS_PER_15_MIN` | `240` | PSN calls allowed per account per 15 minutes |
 | `MAX_LINKS_PER_USER` | `3` | Linked accounts per member per server |
+| `MAX_LINKS_PER_MODERATOR` | `50` | Same, for members with Manage Server (who link for their community) |
 | `SUBREQUEST_BUDGET` | `45` | Raise (e.g. `500`) only on the Workers Paid plan |
 | `EMOJI_PLATINUM` / `_GOLD` / `_SILVER` / `_BRONZE` | 🏆 🟡 ⚪ 🟤 | Custom trophy emojis, e.g. `<:plat:123…>` |
 

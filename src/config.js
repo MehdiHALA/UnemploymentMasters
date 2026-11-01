@@ -62,6 +62,8 @@ export function getSettings(env = {}) {
     refreshPerRun: intSetting(env.REFRESH_PER_RUN, 25, { min: 1, max: 500 }),
     cacheTtlMs: intSetting(env.CACHE_TTL_HOURS, 6, { min: 1, max: 72 }) * HOUR_MS,
     maxLinksPerUser: intSetting(env.MAX_LINKS_PER_USER, 3, { min: 1, max: 25 }),
+    // Moderators often link accounts for their whole community from one Discord account.
+    maxLinksPerModerator: intSetting(env.MAX_LINKS_PER_MODERATOR, 50, { min: 1, max: 500 }),
     syncReplyTimeoutMs: intSetting(env.SYNC_REPLY_TIMEOUT_MS, SYNC_REPLY_TIMEOUT_MS, { min: 10, max: 2800 }),
     opsChannelId: String(env.OPS_CHANNEL_ID || DEFAULT_OPS_CHANNEL_ID),
     supportUrl: env.SUPPORT_URL,
