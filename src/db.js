@@ -229,6 +229,7 @@ const RANKED_CTE = `ranked AS (
          ) AS rank,
          COUNT(*) OVER () AS linked_count,
          SUM(CASE WHEN COALESCE(c.fetched_at, 0) = 0 THEN 1 ELSE 0 END) OVER () AS pending_count,
+         SUM(CASE WHEN COALESCE(c.fetched_at, 0) = 0 AND c.last_error = 'private' THEN 1 ELSE 0 END) OVER () AS private_count,
          MAX(COALESCE(c.fetched_at, 0)) OVER () AS updated_at
   FROM linked l
   LEFT JOIN psn_trophy_cache c ON c.psn_id = l.psn_id
@@ -241,6 +242,7 @@ function summarizeRanking(rows) {
   return {
     linkedCount: linked,
     pendingCount: pending,
+    privateCount: Number(first?.private_count || 0),
     rankedCount: linked - pending,
     updatedAt: Number(first?.updated_at || 0),
   };

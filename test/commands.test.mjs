@@ -36,6 +36,18 @@ test("/leaderboard answers instantly from cache in a 1,000-account server", asyn
   assert.ok(result.meter.psn <= 6, "background top-up refreshes at most 6 accounts");
 });
 
+test("/leaderboard counts private profiles separately from accounts still syncing", async () => {
+  const bot = await createBot();
+  bot.seedAuth();
+  bot.seedAccounts(4, { cache: "fresh" });
+  bot.seedAccounts(5, { cache: "none", start: 10 });
+  bot.db.sqlite.prepare("UPDATE psn_trophy_cache SET last_error = 'private' WHERE psn_id IN (?, ?)").run(psnId(10), psnId(11));
+
+  const result = await bot.command("leaderboard");
+  const text = allText(result.reply.data);
+  assert.match(text, /4 ranked · ⏳ 3 syncing · 🔒 2 private/);
+});
+
 test("/leaderboard with no linked accounts explains how to join", async () => {
   const bot = await createBot();
   const result = await bot.command("leaderboard");

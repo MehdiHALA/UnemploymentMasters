@@ -181,22 +181,25 @@ export function leaderboardView(data, { page, pageSize, theme, title = "Trophy L
   const pageCount = Math.max(1, Math.ceil(data.rankedCount / pageSize));
   const children = [];
 
+  const privateCount = data.privateCount || 0;
+  const syncing = data.pendingCount - privateCount;
   const subtitle = [
     `${fmt(data.rankedCount)} ranked`,
-    data.pendingCount > 0 ? `${icons.sync} ${fmt(data.pendingCount)} syncing` : "",
+    syncing > 0 ? `${icons.sync} ${fmt(syncing)} syncing` : "",
+    privateCount > 0 ? `🔒 ${fmt(privateCount)} private` : "",
     "platinum › gold › silver › bronze",
   ].filter(Boolean).join(" · ");
   children.push(text(`## ${icons.platinum} ${title}\n-# ${subtitle}`));
   children.push(separator());
 
   if (data.rankedCount === 0) {
-    children.push(
-      text(
-        data.linkedCount === 0
-          ? "No one has linked a PSN account here yet.\nUse **/addpsn** to put yourself on the board."
-          : `${icons.sync} Syncing **${fmt(data.linkedCount)}** linked accounts — the first standings appear within a few minutes.`
-      )
-    );
+    let message = "No one has linked a PSN account here yet.\nUse **/addpsn** to put yourself on the board.";
+    if (syncing > 0) {
+      message = `${icons.sync} Syncing **${fmt(syncing)}** linked account${syncing === 1 ? "" : "s"} — the first standings appear within a few minutes.`;
+    } else if (privateCount > 0) {
+      message = "🔒 Every linked account here has private trophies.\nSet **Trophies** to **Anyone** in PSN privacy settings to be ranked.";
+    }
+    children.push(text(message));
     return container(children, COLORS.psn);
   }
 
