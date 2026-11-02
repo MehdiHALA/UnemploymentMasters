@@ -103,6 +103,33 @@ npm install
 | `PREMIUM_CACHE_TTL_HOURS` | `2` | Refresh interval for accounts in Platinum servers |
 | `PREMIUM_LINKS_PER_USER` / `PREMIUM_LINKS_PER_MODERATOR` | `6` / `100` | Link caps in Platinum servers |
 
+## 🛠️ Operating the live bot
+
+`scripts/ops/` holds the tools for deploying and watching the bot through the Cloudflare API. They need only Node 22.13+ (no `npm install`, no Wrangler login), run from the repository root, and never print token values.
+
+**Credentials.** Create a Cloudflare API token with the account permissions *Workers Scripts: Edit*, *D1: Edit*, *Account Analytics: Read* and *Workers Tail: Read*, and put it with your account ID (the 32-character ID, not the account's name) in `~/.psn-bot/credentials.env`:
+
+```
+CLOUDFLARE_API_TOKEN=...
+CLOUDFLARE_ACCOUNT_ID=...
+```
+
+Environment variables with the same names work too, and `PSN_BOT_HOME` moves the folder (it also holds the rollback snapshot). The Worker's name, schedule and database come from `wrangler.toml`.
+
+| Script | What it does |
+| --- | --- |
+| `deploy.mjs deploy` | Uploads `src/` to the live Worker. `--dry-run` builds the upload and shows what would change; `--var NAME=value` sets a plain variable. Secrets are never read or changed |
+| `deploy.mjs verify` | Checks the bindings, schedule, latest deployment and the bot's health |
+| `deploy.mjs rollback` | Goes back to the version that was live before the last deploy |
+| `status.mjs [--since 6h]` | Health report: caches, PSN login, weekly posts, Platinum, and Cloudflare's request and CPU numbers |
+| `inspect.mjs access \| stats \| worker \| sql "SELECT ..."` | What the token can reach, usage totals, the Worker's setup, or your own read-only query |
+| `tail.mjs [seconds]` | Live log of requests and background runs, with errors flagged |
+| `explain.mjs` | Checks that every query the bot runs compiles on the live D1 database; run it after a deploy that adds queries. `--local` tries it on a throwaway copy of `schema.sql` |
+| `migration-rehearsal.mjs` | Runs a pending schema upgrade on a local copy of the live structure and checks it against `schema.sql`; run it before such a deploy |
+| `grant-platinum.mjs` | `find "<name>"` looks up a server; `grant <id> <days\|forever> "<note>" [--announce]` gives it Platinum, like `/admin grant` |
+
+A typical release: `npm test`, then `migration-rehearsal.mjs` if the schema changed, `deploy.mjs deploy`, `deploy.mjs verify` and `explain.mjs`. The Worker is uploaded without a build step, so modules stay directly in `src/` and import only each other; a deploy refuses anything else.
+
 ## 🧪 Development
 
 ```bash
